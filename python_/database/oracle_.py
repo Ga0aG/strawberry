@@ -3,12 +3,14 @@
 
 import cx_Oracle
 
+# https://cx-oracle.readthedocs.io/en/latest/index.html
+
 # I. CRUD, create, read, update, delete
 cx_Oracle.init_oracle_client(lib_dir="/usr/lib/oracle/21/client64/lib")
 pool = cx_Oracle.SessionPool(
     user="system",
     password="oracle",
-    dsn="localhost:49161/xe",
+    dsn="localhost:49161/xe",  # ip:port/sid(service name)
     min=2,
     max=5,
     increment=1,
@@ -101,6 +103,22 @@ cursor.execute(
 )
 rows = cursor.fetchall()
 print(rows)
+
+
+# III. Advance operation
+
+# Query all tables
+cursor.execute("select table_name from all_tables")
+print(cursor.fetchall())
+
+# Show the structure of the table
+cursor.execute(
+    "SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE TABLE_NAME='players'"
+)
+print(cursor.fetchall())
+
+
+# Exit
 
 connection.commit()
 
