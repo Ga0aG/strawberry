@@ -1,0 +1,3 @@
+/home/bot/strawberry/cmake_/hello_world/install/include/simple_math/simple_math/sum.hh
+/home/bot/strawberry/cmake_/hello_world/install/lib/libsimple_math.so
+/home/bot/strawberry/cmake_/hello_world/install/lib/simple_math/prog

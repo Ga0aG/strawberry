@@ -1,0 +1,1 @@
+/usr/bin/c++   -Wall -Wextra -Wpedantic   CMakeFiles/prog.dir/src/main.cpp.o  -o prog -Wl,-rpath,/home/bot/strawberry/cmake_/hello_world/build: libsimple_math.so 
