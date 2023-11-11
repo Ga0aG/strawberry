@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC  -Wall -Wextra -Wpedantic  -shared -Wl,-soname,libsimple_math.so -o libsimple_math.so CMakeFiles/simple_math.dir/src/sum.cpp.o 

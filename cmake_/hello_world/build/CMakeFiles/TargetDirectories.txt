@@ -1,8 +1,0 @@
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/install/strip.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/install/local.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/prog.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/edit_cache.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/rebuild_cache.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/simple_math.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/list_install_components.dir
-/home/bot/strawberry/cmake_/hello_world/build/CMakeFiles/install.dir
