@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 endif()
 
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../hello_world/install")
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../A-hello_world/install")
 # include("/home/bot/strawberry/cmake_/hello_world/install/lib/cmake/simple_math/simple_math-config.cmake")
 # include("/home/bot/strawberry/cmake_/hello_world/install/lib/cmake/simple_math/simple_math-targets.cmake")
 find_package(simple_math REQUIRED)

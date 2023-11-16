@@ -26,7 +26,7 @@ target_include_directories(${PROJECT_NAME}
 )
 
 add_executable(prog src/main.cpp)
-target_include_directories(prog PUBLIC include)
+# target_include_directories(prog PUBLIC include)
 target_link_libraries(prog ${PROJECT_NAME})
 
 # message(${CMAKE_CURRENT_SOURCE_DIR})
