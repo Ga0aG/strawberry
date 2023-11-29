@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 // auto start = std::chrono::system_clock::now();
 inline std::string now() {
@@ -16,7 +17,7 @@ inline std::string now() {
       std::chrono::duration_cast<std::chrono::microseconds>(duration).count() *
       1e-6;
   return "[" + std::to_string(seconds) + "] ";
-}
+};
 
 #define INFO_STREAM(stream_arg)                                                \
   do {                                                                         \
@@ -30,3 +31,11 @@ inline void print_header(const std::string &header) {
   std::cout << now() << "***************************" << std::endl;
   std::cout << now() << "== " << header << " ==" << std::endl;
 }
+
+template <typename T> inline void print_vector(std::vector<T> vec) {
+  std::cout << now();
+  for (auto i : vec) {
+    std::cout << i << ", ";
+  }
+  std::cout << std::endl;
+};
