@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tutorial_interfaces</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="bot@todo.todo">bot</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <!-- rosidl_default_runtime is a runtime or execution-stage dependency, needed to be able to use the interfaces later -->
+  <!-- rosidl_default_runtime provides CMake functionality for finding and adding runtime dependencies for rosidl packages. -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <!-- rosidl_interface_packages is the name of the dependency group that your package should be associated with, declared using the <member_of_group> tag -->
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  <depend>geometry_msgs</depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <!-- For create action -->
+  <depend>action_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
