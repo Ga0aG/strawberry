@@ -31,6 +31,28 @@ target_link_libraries(prog ${PROJECT_NAME})
 
 # message(${CMAKE_CURRENT_SOURCE_DIR})
 
+option(BUILD_TESTING "Build testing" ON)
+if(BUILD_TESTING)
+  enable_testing()
+  include(GoogleTest)
+  include(Dart)
+
+  add_executable(tests
+    tests/test_main.cc
+    tests/test_lib.cc
+  )
+
+  # target_compile_options(tests
+  #   PRIVATE
+  #   -Wno-ignored-qualifiers -Wno-unused-variable -Wno-pointer-arith
+  #   -Wno-unused-but-set-variable
+  # )
+  find_package(Threads REQUIRED)
+  target_link_libraries(tests PRIVATE gtest ${PROJECT_NAME} Threads::Threads)
+  target_include_directories(tests PRIVATE include)
+
+  gtest_discover_tests(tests DISCOVERY_TIMEOUT 60)
+endif()
 # Install includes
 install(
   DIRECTORY include/
