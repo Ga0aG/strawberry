@@ -26,7 +26,7 @@ int main() {
     // A. Dereferencing uninitialized pointer
     // int *ptr = nullptr;
     // int i = 1;
-    // *ptr = 1; 
+    // *ptr = 1;
     // 空指针访问即尝试操作地址为0的内存区域，由于该区域内存是禁止访问的区域，所以当发生空指针访问时进程就会收到SIGSEGV信号发生
 
     // B. Access out of array index bounds
