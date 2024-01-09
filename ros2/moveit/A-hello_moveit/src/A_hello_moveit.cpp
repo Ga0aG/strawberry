@@ -1,13 +1,14 @@
 #include <memory>
-#include <rclcpp/rclcpp.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
+#include <rclcpp/rclcpp.hpp>
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char *argv[]) {
   // Initialize ROS and create the Node
   rclcpp::init(argc, argv);
   auto const node = std::make_shared<rclcpp::Node>(
-      "hello_moveit", rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true));
+      "hello_moveit",
+      rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(
+          true));
 
   // Create a ROS logger
   auto const logger = rclcpp::get_logger("hello_moveit");
@@ -35,12 +36,9 @@ int main(int argc, char* argv[])
   }();
 
   // Execute the plan
-  if (success)
-  {
+  if (success) {
     move_group_interface.execute(plan);
-  }
-  else
-  {
+  } else {
     RCLCPP_ERROR(logger, "Planning failed!");
   }
 
