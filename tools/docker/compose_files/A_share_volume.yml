@@ -1,0 +1,22 @@
+version: '2.3'
+networks: {}
+services:
+  python_core:
+    image: python:3-slim-stretch
+    container_name: python_core
+    command: bash -c "python3"
+    depends_on:
+      - foxy_container
+    network_mode: host
+    tty: true
+    stdin_open: true
+    restart: always # Restart container when computer restart
+    volumes:
+      - foxy_volume:/root/ws_moveit
+  foxy_container:
+    image: moveit/moveit2:foxy-source
+    network_mode: host
+    volumes:
+      - foxy_volume:/root/ws_moveit
+volumes:
+  foxy_volume: {}
