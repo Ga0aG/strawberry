@@ -1,9 +1,9 @@
 # -*- coding: UTF-8 -*-
-
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, declarative_base, sessionmaker
-
+from IPython import embed
 # https://zhuanlan.zhihu.com/p/387078089
 
 # 连接引擎
@@ -20,30 +20,34 @@ class User(Base):
     name: Mapped[str]
     fullname = Column(String)
     nickname = Column(String)
+    created_datetime: Mapped[datetime]
     def __repr__(self):
-       return "<User(name='%s', fullname='%s', nickname='%s')>" % (
-                            self.name, self.fullname, self.nickname)
+       return "<User(name='%s', fullname='%s', nickname='%s', createdTime='%s')>" % (
+                            self.name, self.fullname, self.nickname, self.created_datetime)
 
 User.metadata.create_all(engine)
 """
 In [27]: User.metadata.sorted_tables
 Out[27]: [Table('users', MetaData(), Column('id', Integer(), table=<users>, primary_key=True, nullable=False), Column('name', String(), table=<users>), Column('fullname', String(), table=<users>), Column('nickname', String(), table=<users>), schema=None)]
 """
-ed_user = User(name='ed', fullname='Ed Jones', nickname='edsnickname')
 
 Session = sessionmaker(bind=engine)
+now = datetime.now()
 # 实例化
 session = Session()
+ed_user = User(name='ed', fullname='Ed Jones', nickname='edsnickname', created_datetime = now+timedelta(microseconds=3))
+session.add(ed_user)
+ed_user = User(name='ad', fullname='ad Jones', nickname='adsnickname', created_datetime = now+timedelta(microseconds=1))
 session.add(ed_user)
 session.commit()
 # SELECT
-our_user = session.query(User).filter_by(name='ed').first() 
+our_user = session.query(User).filter_by(name='ed').first()
 # 回滚
 # session.rollback()
 # 查询
 for instance in session.query(User).order_by(User.id):
     print(instance.name, instance.fullname)
-query = session.query(User)
+query = session.query(User).order_by(User.created_datetime)
 # query.filter() 过滤
 # query.filter_by() 根据关键字过滤
 # query.all() 返回列表
@@ -54,6 +58,10 @@ query = session.query(User)
 # query.count() 计数
 # query.order_by() 排序
 
+embed()
+session.close()
+engine.dispose()
+exit()
 # 常用的筛选器
 # 等于
 query.filter(User.name == 'ed')
