@@ -22,6 +22,7 @@ int main() {
   printf("Message form server: %s\n", buffer);
   char str[] = "Aloha";
   //发送数据到服务器
+  printf("Send message to server");
   send(sock, str, sizeof(str), 0);
   //关闭套接字
   close(sock);
