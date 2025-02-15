@@ -1,0 +1,3 @@
+[submodule "robotics/slambook"]
+	path = robotics/slambook
+	url = https://github.com/Ga0aG/slambook.git
