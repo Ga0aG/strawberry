@@ -21,6 +21,7 @@ class TimerApp:
         self.task_name = ""
 
         self.records = pd.DataFrame(columns=["start_time", "end_time", "task_name"])
+        self.targetInfo = pd.DataFrame(columns=["task_name", "estimate_time(day)", "done"])
 
         # Load existing records
         self.load_records()
@@ -87,6 +88,8 @@ class TimerApp:
     def load_records(self):
         try:
             self.records = pd.read_csv(self.args.fileName)
+            if self.args.targetFileName:
+                self.targetInfo = pd.read_csv(self.args.targetFileName)
         except:
             self.records = pd.DataFrame(columns=["start_time", "end_time", "task_name"])
 
@@ -191,15 +194,22 @@ class TimerApp:
                 self.record_per_day[dayString] += row['end_time'] - row['start_time']
         else:
             row = self.records.iloc[-1]
-            self.record_per_type[row['task_name']] += row['end_time'] - row['start_time']
+            task_name = row['task_name']
+            self.record_per_type[task_name] += row['end_time'] - row['start_time']
             dayString = time.strftime('%Y-%m-%d', time.localtime(row['start_time']))
             self.record_per_day[dayString] += row['end_time'] - row['start_time']
+            if task_name not in self.targetInfo["task_name"].to_list():
+                self.targetInfo.loc[len(self.targetInfo)] = [task_name, 0, False]
+                self.targetInfo.to_csv(self.args.targetFileName, index_label=False)
+        targetEstimateTime: dict = self.targetInfo.set_index('task_name').to_dict()['estimate_time(day)']
+        isTargetFinished: dict = self.targetInfo.set_index('task_name').to_dict()['done']
 
-        sorted_stats = sorted(self.record_per_type.items(), key=lambda x: x[1], reverse=True)
-        self.statistics_text.insert(tk.END, f"In total({self.args.dayHour}h): {self.format_time(sum(self.record_per_type.values()), cn=True, dayHour=self.args.dayHour)}\n")
-
-        for task, duration in sorted_stats:
-            self.statistics_text.insert(tk.END, f"{task}: {self.format_time(duration, cn=True)}\n")
+        sorted_targets = dict(sorted(targetEstimateTime.items(), key=lambda x: (isTargetFinished[x[0]], self.record_per_type.get(x[0], 0)-x[1]*3600)))
+        sum_distance = sum([estimateTime-min(estimateTime, self.record_per_type.get(task_name,0)/3600/self.args.dayHour) for task_name, estimateTime in sorted_targets.items() if not isTargetFinished[task_name]])*3600*self.args.dayHour
+        self.statistics_text.insert(tk.END, f"In total({self.args.dayHour}h): {self.format_time(sum(self.record_per_type.values()), cn=True, dayHour=self.args.dayHour)}\nRemain time: {self.format_time(sum_distance, cn=True, dayHour=self.args.dayHour)}\n\n")
+        for task, estimate_time in sorted_targets.items():
+            prefix = "[X]" if isTargetFinished[task] else "[ ]"
+            self.statistics_text.insert(tk.END, f"{prefix} {task}: {self.format_time(self.record_per_type.get(task, 0), cn=True, dayHour=self.args.dayHour)} / {estimate_time}天\n")
 
         self.statistics_text.config(state=tk.DISABLED)
 
@@ -221,6 +231,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     parser = argparse.ArgumentParser()
     parser.add_argument("--fileName", default="records.csv")
+    parser.add_argument("--targetFileName", default="")
     parser.add_argument("--dayHour", default=8)
     args = parser.parse_args()
     app = TimerApp(root, args)
