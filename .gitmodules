@@ -1,3 +1,6 @@
 [submodule "robotics/slambook"]
 	path = robotics/slambook
 	url = https://github.com/Ga0aG/slambook.git
+[submodule "ros2/intermediate/D-urdf_tutorial"]
+	path = ros2/intermediate/D-urdf_tutorial
+	url = https://github.com/ros/urdf_tutorial.git
