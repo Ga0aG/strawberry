@@ -4,3 +4,6 @@
 [submodule "ros2/intermediate/D-urdf_tutorial"]
 	path = ros2/intermediate/D-urdf_tutorial
 	url = https://github.com/ros/urdf_tutorial.git
+[submodule "ros2/intermediate/D-urdf_launch"]
+	path = ros2/intermediate/D-urdf_launch
+	url = https://github.com/ros/urdf_launch.git

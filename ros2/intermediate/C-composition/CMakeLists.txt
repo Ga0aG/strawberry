@@ -33,8 +33,11 @@ ament_target_dependencies(talker_component
   rclcpp_components
   class_loader
   std_msgs)
-rclcpp_components_register_nodes(talker_component "composition::Talker")
+rclcpp_components_register_nodes(talker_component "new_composition::Talker")
 # set(node_plugins "${node_plugins}composition::Talker;$<TARGET_FILE:talker_component>\n")
+
+# Run talker as a single node
+# rclcpp_components_register_node(talker_component PLUGIN "new_composition::Talker" EXECUTABLE talker)
 
 add_library(listener_component SHARED
   src/listener_component.cpp)
@@ -43,7 +46,7 @@ ament_target_dependencies(listener_component
   rclcpp_components
   class_loader
   std_msgs)
-rclcpp_components_register_nodes(listener_component "composition::Listener")
+rclcpp_components_register_nodes(listener_component "new_composition::Listener")
 # set(node_plugins "${node_plugins}composition::Listener;$<TARGET_FILE:listener_component>\n")
 
 add_executable(manual_composition
@@ -94,6 +97,7 @@ install(DIRECTORY
 #   launch config
 #   DESTINATION share/${PROJECT_NAME})
 
+# export a composable node as a shared library from a package and use that node in another package that does link-time composition?
 ament_export_libraries(${PROJECT_NAME})
 ament_export_include_directories(include)
 ament_export_dependencies(${DEP_PACKAGES})

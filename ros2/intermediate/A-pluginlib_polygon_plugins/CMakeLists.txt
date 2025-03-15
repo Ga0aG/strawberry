@@ -27,8 +27,8 @@ target_include_directories(polygon_plugins PUBLIC
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(
   polygon_plugins
-  "polygon_base"
-  "pluginlib"
+  polygon_base
+  pluginlib
 )
 
 pluginlib_export_plugin_description_file(polygon_base plugins.xml)

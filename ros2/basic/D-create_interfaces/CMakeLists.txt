@@ -22,15 +22,28 @@ find_package(ament_cmake REQUIRED)
 # find_package(<dependency> REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(rclcpp REQUIRED)
 
 # The first argument (library name) in the rosidl_generate_interfaces must match ${PROJECT_NAME}
-rosidl_generate_interfaces(${PROJECT_NAME}
+set(msg_files
   "msg/Num.msg"
   "msg/Sphere.msg"
+  "msg/AddressBook.msg"
+)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  ${msg_files}
   "srv/AddThreeInts.srv"
   "action/Fibonacci.action"
   DEPENDENCIES geometry_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
 )
+
+add_executable(publish_address_book src/publish_address_book.cpp)
+ament_target_dependencies(publish_address_book rclcpp)
+
+# This finds the relevant generated C++ code from AddressBook.msg and allows your target to link against it
+# This CMake code is only required when you want to use interfaces in the same package as the one in which they are defined.
+rosidl_target_interfaces(publish_address_book
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -42,5 +55,9 @@ if(BUILD_TESTING)
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+install(TARGETS
+    publish_address_book
+  DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

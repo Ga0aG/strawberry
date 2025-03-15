@@ -9,7 +9,11 @@ using namespace std::chrono_literals;
 class MinimalParam : public rclcpp::Node {
 public:
   MinimalParam() : Node("minimal_param_node") {
-    this->declare_parameter("my_parameter", "world");
+    // Optional
+    auto param_desc = rcl_interfaces::msg::ParameterDescriptor{};
+    param_desc.description = "This parameter is mine!";
+
+    this->declare_parameter("my_parameter", "world", param_desc);
 
     timer_ = this->create_wall_timer(
         1000ms, std::bind(&MinimalParam::timer_callback, this));
