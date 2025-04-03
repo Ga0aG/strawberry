@@ -7,3 +7,12 @@
 [submodule "ros2/intermediate/D-urdf_launch"]
 	path = ros2/intermediate/D-urdf_launch
 	url = https://github.com/ros/urdf_launch.git
+[submodule "c++/3rd/thread-pool"]
+	path = c++/3rd/thread-pool
+	url = https://github.com/mtrebi/thread-pool.git
+[submodule "ros2/intermediate/F-rviz_plugin_tutorial"]
+	path = ros2/intermediate/F-rviz_plugin_tutorial
+	url = https://github.com/MetroRobots/rviz_plugin_tutorial.git
+[submodule "python/web/grpc"]
+	path = python/web/grpc
+	url = https://github.com/grpc/grpc
