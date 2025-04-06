@@ -1,0 +1,1 @@
+"use strict";class HelloWorld{constructor(text){this.text=text}display(){const el=document.getElementById("app");el.innerHTML=`<h1>${this.text}</h1>`}}new HelloWorld("TypeScript!").display();

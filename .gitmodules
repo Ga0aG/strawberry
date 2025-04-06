@@ -16,3 +16,6 @@
 [submodule "python/web/grpc"]
 	path = python/web/grpc
 	url = https://github.com/grpc/grpc
+[submodule "others/typescripts/typescript-from-zero"]
+	path = others/typescripts/typescript-from-zero
+	url = https://github.com/jeffsieu/typescript-from-zero.git

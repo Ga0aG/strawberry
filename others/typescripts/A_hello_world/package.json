@@ -1,0 +1,15 @@
+{
+  "name": "b_hello_synax",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "check": "tsc --noEmit",
+    "start": "serve -l 3000",
+    "build": "tsc && terser dist/*.js -o dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
