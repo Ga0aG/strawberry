@@ -161,5 +161,11 @@ int main()
             INFO_STREAM("" << ex.what());
         }
     }
+    if (false || runAll) // decltype
+    {
+        print_header("decltype");
+        int i = 33;
+        decltype(i) j = i * 2;
+    }
     return 0;
 }

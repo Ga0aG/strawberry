@@ -10,6 +10,7 @@ public:
   int x_ = 0;
   Base(int val) : x_(val) {}
   void show() { INFO_STREAM("Show time: x = " << x_ << ", y = " << y_ << ", z = " << z_); }
+  virtual ~Base(){INFO_STREAM("Bye, Base");}
 
   // protected member can be accessed by derived class
 protected:
@@ -23,6 +24,7 @@ class PublicDerived : public Base
 {
 public:
   PublicDerived(int val) : Base(val) {}
+  ~PublicDerived() override {INFO_STREAM("Bye, PublicDerived");}
   // x is public
   // y is protected
   // z is not accessible from PublicDerived
@@ -197,6 +199,49 @@ void TestConstructorFunWithReference(const TestConstructor &a) // // 避免拷�
   INFO_STREAM("Access val: " << a.val);
 }
 
+template <class T>
+class QueueNestedClass{
+  public:
+  void enqueue(const T& val);
+  void clear();
+  QueueNestedClass<T>() = default;
+  private:
+  class NestedNode{
+    public:
+     T value_;
+     NestedNode* next_;
+     NestedNode(const T& val): value_(val), next_(nullptr){INFO_STREAM("Create a new nestedNode: " << value_);}
+     ~NestedNode(){INFO_STREAM("Byebye nestedNode: " << value_);}
+  };
+  NestedNode* front = nullptr;
+  NestedNode* rear = nullptr;
+};
+template <class T>
+void QueueNestedClass<T>::enqueue(const T& val){
+  NestedNode* newNode = new NestedNode(val);
+  if(front==nullptr){
+    front = newNode;
+  }
+  else{
+    rear->next_ = newNode;
+  }
+  rear = newNode;
+}
+template <class T>
+void QueueNestedClass<T>::clear()
+{
+  while(front != nullptr)
+  {
+    // rear = front;
+    // delete front;
+    // front = rear->next_; // rear指向的数据已经被删除了
+    rear = front; // 保存当前的 front
+    front = front->next_;     // 移动 front 到下一个节点
+    delete rear;              // 删除之前的 front
+  }
+  // rear = nullptr;
+}
+
 int main()
 {
   bool runAll = true;
@@ -263,8 +308,8 @@ int main()
     INFO_STREAM("Size of DataAlignment(DataAlignment2+char): " << sizeof(DataAlignment6));   // 48
     INFO_STREAM("Size of Shape: " << sizeof(Shape));                                         // 40
     INFO_STREAM("Size of Rectangle: " << sizeof(Rectangle));                                 // 64
-    INFO_STREAM("Member Offset of DataAlignment(char+int+string):" << offsetof(DataAlignment4, a) << ", " << offsetof(DataAlignment4, b) << ", " << offsetof(DataAlignment4, c) << ", ");
-    INFO_STREAM("Member Offset of DataAlignment(char+string+int):" << offsetof(DataAlignment7, a) << ", " << offsetof(DataAlignment7, c) << ", " << offsetof(DataAlignment7, b) << ", ");
+    INFO_STREAM("Member Offset of DataAlignment(char+int+string):" << offsetof(DataAlignment4, a) << ", " << offsetof(DataAlignment4, b) << ", " << offsetof(DataAlignment4, c) << ", "); // 0, 4, 8
+    INFO_STREAM("Member Offset of DataAlignment(char+string+int):" << offsetof(DataAlignment7, a) << ", " << offsetof(DataAlignment7, c) << ", " << offsetof(DataAlignment7, b) << ", ");// 0, 8, 40
   }
   if (false || runAll) // Friend class and function
   {
@@ -280,8 +325,12 @@ int main()
   if (false || runAll) // Inherit
   {
     print_header("inherit");
-    Base a = Base(1);
+    // Base a = Base(1);
     PublicDerived b = PublicDerived(1);
+    // > 如果Base的析构没有加virtual的话，PublicDerived的析构函数就不会被调用
+    // 尽管base的类型是Base*，它实际上指向的是一个PublicDerived对象, 因此它的vptr指向PublicDerived的虚函数表。如果Base的析构函数没有被声明为虚的，C++运行时会根据base指针的类型（即Base*）查找Base的析构函数。
+    Base *base = new PublicDerived(1);
+    delete base;
   }
   if (false || runAll) // lvalue & rvalue
   {
@@ -308,6 +357,16 @@ int main()
     TestConstructor e(2);
     e = std::move(c);
     // move assignment, val: 2
+  }
+  if (false || runAll) // nested class
+  {
+    print_header("nested class");
+    // QueueNestedClass<int> q = QueueNestedClass<int>();
+    QueueNestedClass<int> q{};
+    q.enqueue(1);
+    q.enqueue(2);
+    INFO_STREAM("Ready to clear");
+    q.clear();
   }
   return 0;
 }

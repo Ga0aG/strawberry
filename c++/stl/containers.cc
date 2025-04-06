@@ -213,7 +213,4 @@ int main()
         };
         printMap(u);
     }
-    if (false || runAll) //
-    {
-    }
 }

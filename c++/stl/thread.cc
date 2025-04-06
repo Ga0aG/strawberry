@@ -42,14 +42,18 @@ void customer(std::shared_future<int> f_notice) {
   mtx.unlock();
 }
 
-int main() {
-  { // thread
+int main()
+{
+  bool runAll = true;
+  if(false || runAll) // spawn thread
+  {
     print_header("Test thread");
     std::thread threads[10];
+    std::atomic<bool> ready1(false);
     for (int i = 0; i < 10; ++i) {
       threads[i] = std::thread(
-          [](int id) {
-            while (!ready) { // wait until main() sets ready...
+          [&ready1](int id) {
+            while (!ready1) { // wait until main() sets ready1...
               std::this_thread::yield();
             }
             for (volatile int i = 0; i < 1000000; ++i) {
@@ -58,13 +62,13 @@ int main() {
           },
           i);
     }
-    ready = true; // go!
+    ready1 = true; // go!
     for (auto &th : threads)
       th.join();
     std::cout << '\n';
   }
-
-  { // async & launch policy
+  if(false || runAll) // async & launch policy
+  {
     print_header("Test async & launch policy");
     std::cout << now() << "Test async policy" << std::endl;
     auto future = std::async(std::launch::async, print_block, 1,
@@ -97,16 +101,16 @@ int main() {
     future.get();          // function was called in wait/get
     // print_future_status(); // No associated state
   }
-
-  { // mutex
+  if(false || runAll) // mutex
+  {
     print_header("Test mutex");
     // std::thread th1 (print_block,500,'*');
     // std::thread th2 (print_block,500,'$');
     // th1.join();
     // th2.join();
   }
-
-  { // shared_future & promise
+  if(false || runAll) // shared_future & promise
+  {
     print_header("Test shared_future");
     std::promise<int> p_notice;
     std::shared_future<int> f_notice1 = p_notice.get_future().share();
@@ -118,8 +122,8 @@ int main() {
     customer2.join();
     worker1.join();
   }
-
-  { // condition variable
+  if(false || runAll) // condition variable
+  {
     print_header("Test condition variable");
     std::mutex mtx;
     std::condition_variable cv;
@@ -151,8 +155,8 @@ int main() {
     }
     alarm_thread.join();
   }
-
-  { // atomic
+  if(false || runAll) // atomic
+  {
     print_header("Test atomic");
     std::atomic_int num{0};
     int normal_int{0};
@@ -172,6 +176,23 @@ int main() {
     std::cout << now() << "Atomic int Sum:" << num.load() << std::endl;
     std::cout << now() << "Normal int Sum:" << normal_int << std::endl;
   }
-
+  if(false || runAll) // thread pool
+  {
+    // #include "../3rd/thread-pool/include/ThreadPool.h"
+    // https://github.com/mtrebi/thread-pool/tree/master
+    /**
+		 * @brief Why thread pool?
+		 * 线程过多或者频繁创建和销毁线程会带来调度开销，进而影响缓存局部性和整体性能。而线程池维护着多个线程，等待着管理器分配可并发执行的任务。这**避免了在处理短时间任务时创建与销毁线程的代价**，以及保证了线程的可复用性。
+		 * csapp-ch12.3.1 线程切换和进程切换很相似，也需要上下文切换。
+		 * csapp-ch8.2.5 进程上下文切换:
+		 * (1) saves the context of the current process,
+		 * (2) restores the saved context of some previously preempted挂起的 process, and
+		 * (3) passes control to this newly restored process.
+		 * csapp-ch8.2.4 内核态与用户态
+		 * 处理器使用某个控制寄存器中的一个模式位（mode bit）来区分用户模式与内核模式。
+		 * 运行在内核模式的进程可以执行指令集中的任何指令，并可以访问系统中的任何内存位置。
+		 * 运行在用户模式的进程不允许执行特权指令，比如停止处理器、改变模式位、发起 I/O 操作等，也不能直接引用地址空间内核区中的代码和数据，用户程序只能通过系统调用接口间接地访问内核代码和数据。进程从用户模式变为内核模式的方法是通过中断、故障、陷阱（系统调用就是陷阱）这样的异常。
+		 */
+  }
   return 0;
 }
