@@ -1,0 +1,23 @@
+<!-- views/userView.ejs -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>用户列表</title>
+</head>
+<body>
+    <h1>用户管理系统</h1>
+
+    <!-- 用户列表 -->
+    <ul>
+        <% users.forEach(user => { %>
+            <li><%= user.id %> - <%= user.name %></li>
+        <% }); %>
+    </ul>
+
+    <!-- 添加用户表单 -->
+    <form action="/users" method="POST">
+        <input type="text" name="name" placeholder="输入用户名">
+        <button type="submit">添加用户</button>
+    </form>
+</body>
+</html>
