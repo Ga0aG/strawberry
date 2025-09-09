@@ -19,3 +19,6 @@
 [submodule "others/typescripts/typescript-from-zero"]
 	path = others/typescripts/typescript-from-zero
 	url = https://github.com/jeffsieu/typescript-from-zero.git
+[submodule "python/opencv_tutorial"]
+	path = python/opencv_tutorial
+	url = https://github.com/ex2tron/OpenCV-Python-Tutorial.git
