@@ -1,0 +1,11 @@
+# CUDA Version: 11.7
+
+pytorch==2.0.0
+torchvision==0.15.0
+torchaudio==2.0.0
+pytorch-cuda=11.7
+
+pyaudio
+webrtcvad
+numpy
+soundfile
