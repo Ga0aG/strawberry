@@ -22,3 +22,9 @@
 [submodule "python/opencv_tutorial"]
 	path = python/opencv_tutorial
 	url = https://github.com/ex2tron/OpenCV-Python-Tutorial.git
+[submodule "machine_learning/FunASR"]
+	path = machine_learning/FunASR
+	url = https://github.com/modelscope/FunASR.gi
+[submodule "machine_learning/speech_recognition"]
+	path = machine_learning/speech_recognition
+	url = https://github.com/Uberi/speech_recognition.git
