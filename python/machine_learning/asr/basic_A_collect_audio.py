@@ -17,7 +17,7 @@ class AudioRecorder:
         output_file="output.wav",
         record_seconds=10,
         channels=1,
-        rate=48000,
+        rate=16000,
         chunk=2**12,
     ):
         """

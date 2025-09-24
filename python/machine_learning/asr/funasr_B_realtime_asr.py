@@ -1,32 +1,18 @@
-import sys
-import threading
-import queue
-import time
 import numpy as np
 import pyaudio
-import webrtcvad
+import queue
+import threading
+import time
+import torch
+import torchaudio
 import traceback
+import webrtcvad
 from funasr import AutoModel
 from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
-import logging
+from utils.logger import create_logger
 
-
-# logging.basicConfig(
-#     level=logging.DEBUG,
-#     format="[%(asctime)s:.%(msecs)06d] [%(levelname)s] [%(filename)s:%(lineno)-4d] %(message)s",
-#     datefmt="%H:%M:%S:",
-# )
-logger = logging.getLogger(__name__)
-logger.setLevel(level=logging.DEBUG)
-formatter = logging.Formatter(
-    fmt="[%(asctime)s:%(msecs)06d] [%(levelname)s] [%(filename)s:%(lineno)-4d] %(message)s",
-    datefmt="%H:%M:%S",
-)
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
-logger.propagate = False
+logger = create_logger(__name__)
 
 
 class RealTimeASR:
@@ -38,7 +24,8 @@ class RealTimeASR:
             model_size: 模型大小，可选 "small", "medium", "large"
         """
         # 初始化FunASR模型
-        logger.info("正在加载FunASR模型...")
+        logger.info("正在加载模型...")
+        start_time = time.time()
         if model_size == "small":
             model_dir = "/home/ga/.cache/modelscope/hub/models/iic/SenseVoiceSmall"
         elif model_size == "medium":
@@ -54,16 +41,35 @@ class RealTimeASR:
             device="cuda:0",
             disable_update=True,
         )
-        logger.info("模型加载完成")
 
         # 音频参数
-        self.sample_rate = 48000
-        self.chunk_size = 960  # 500ms chunks for VAD 48000*0.02
-        self.format = pyaudio.paInt16
+        self.sample_rate = 16000  # 　据说这是Funasr的默认采样率
+        """
+        chunk_size在FunASR中是一个流式推理的重要参数，通常是一个包含3个元素的数组[前向chunk, 后向chunk, 编码器chunk]
+        - 第一个元素（前向chunk）：解码器的前向chunk大小，控制流式识别的延迟
+        - 第二个元素（后向chunk）：解码器的后向chunk大小，影响识别准确率
+        - 第三个元素（编码器chunk）：编码器的chunk大小，控制计算效率
+        """
+        self.chunk_size = [5, 10, 5]
+        self.format = pyaudio.paInt16  # 16位 = 2字节/样本
         self.channels = 1
+        chunk_interval = 10
+        self.CHUNK = 512# int(self.sample_rate / 1000 * 60)  # 60ms
 
         # 初始化VAD（语音活动检测）
-        self.vad = webrtcvad.Vad(2)  # 中等灵敏度
+        vad_model, vad_utils = torch.hub.load(
+            # repo_or_dir='snakers4/silero-vad',
+            # source='github',
+            repo_or_dir='/home/ga/.cache/torch/hub/snakers4_silero-vad_master',
+            source='local',
+            model='silero_vad',
+            force_reload=False
+        )
+        (self.get_speech_timestamps, _, self.read_audio,
+         self.VADIterator, self.collect_chunks) = vad_utils
+        # 创建VAD迭代器（用于流式处理）
+        self.vad_iterator = self.VADIterator(vad_model)
+        self.hear_something_timestamp = None
 
         # 音频队列
         self.audio_queue = queue.Queue()
@@ -76,17 +82,9 @@ class RealTimeASR:
             channels=self.channels,
             rate=self.sample_rate,
             input=True,
-            frames_per_buffer=self.chunk_size,
-            # stream_callback=self.audio_callback,
+            frames_per_buffer=self.CHUNK,
         )
-
-
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        """PyAudio回调函数，用于捕获音频数据"""
-        if self.is_recording:
-            # 将音频数据放入队列
-            self.audio_queue.put(in_data)
-        return (None, pyaudio.paContinue)
+        logger.info(f"模型加载完成: {time.time()-start_time}")
 
     def record_audio(self):
         """录制音频"""
@@ -108,37 +106,65 @@ class RealTimeASR:
     def process_audio(self):
         """处理音频数据并进行语音识别"""
         audio_buffer = b""
+        speech_frames = 0
         silence_frames = 0
-        max_silence_frames = 50  # 最多允许20帧静音
+        min_speech_frames = 10  # 最少需要语音帧数才开始识别
+        max_silence_frames = 20  # 静音超过这个阈值认为说话结束
+        max_audio_duration = 10.0  # 最大音频长度（秒）
 
         logger.info("开始处理音频...")
 
-        while self.is_recording:# or not self.audio_queue.empty():
+        while self.is_recording:  # or not self.audio_queue.empty():
             try:
                 # 从队列中获取音频数据
                 # data = self.audio_queue.get(timeout=1)
-                data = self.stream.read(self.chunk_size)
-                is_speech = False
-                if data:
-                    audio_buffer += data
-
-                    # 使用VAD检测是否有语音活动
-                    is_speech = self.vad.is_speech(data, self.sample_rate)
-
+                data = self.stream.read(self.CHUNK, exception_on_overflow=False)
+                if not data:
+                    time.sleep(0.1)
+                    continue
+                is_speech = self.check_is_speech(data)
                 if is_speech:
+                    audio_buffer += data
+                    speech_frames += 1
                     silence_frames = 0
-                    logger.info(f"len of audio_buffer: {len(audio_buffer)}")
-                    # 如果有语音活动，继续收集数据
-                    if len(audio_buffer) > self.sample_rate * 2:  # 最多收集2秒音频
-                        self.transcribe_audio(audio_buffer)
-                        audio_buffer = b""
+                    # logger.debug(f"检测到语音，连续语音帧: {speech_frames}")
                 else:
                     silence_frames += 1
-                    # 如果连续静音帧超过阈值，转录当前缓冲区
-                    if silence_frames >= max_silence_frames and len(audio_buffer) > 0:
-                        self.transcribe_audio(audio_buffer)
-                        audio_buffer = b""
-                        silence_frames = 0
+                    # logger.debug(f"静音帧: {silence_frames}")
+
+                # 计算当前音频时长
+                current_duration = (
+                    len(audio_buffer) / 2 / self.sample_rate
+                )  # 16位=2字节
+
+                # 判断是否应该转录
+                should_transcribe = False
+
+                # 情况1：检测到语音开始后又出现足够长的静音（一句话结束）
+                if (
+                    speech_frames >= min_speech_frames
+                    and silence_frames >= max_silence_frames
+                ):
+                    should_transcribe = True
+                    logger.info("检测到语句结束，开始转录")
+
+                # 情况2：音频过长，强制转录（避免内存溢出和延迟过大）
+                elif current_duration >= max_audio_duration:
+                    should_transcribe = True
+                    logger.info("音频过长，强制转录")
+
+                if should_transcribe:
+                    self.transcribe_audio(audio_buffer)
+                    # 保留最后0.5秒音频作为上下文衔接
+                    keep_duration = 0.5  # 保留0.5秒
+                    keep_bytes = int(keep_duration * self.sample_rate * 2)
+                    audio_buffer = (
+                        audio_buffer[-keep_bytes:]
+                        if len(audio_buffer) > keep_bytes
+                        else b""
+                    )
+                    speech_frames = 0
+                    silence_frames = 0
 
             except queue.Empty:
                 continue
@@ -149,14 +175,34 @@ class RealTimeASR:
         if len(audio_buffer) > 0:
             self.transcribe_audio(audio_buffer)
 
+    def check_is_speech(self, audio_data):
+        """处理音频流"""
+        # 转换为torch tensor
+        if isinstance(audio_data, np.ndarray):
+            audio_tensor = torch.from_numpy(audio_data).float()
+        else:
+            # 如果是bytes，先转换为numpy
+            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            audio_tensor = torch.from_numpy(audio_np).float()
+
+        # 使用VAD迭代器
+        # raise ValueError(f"Provided number of samples is {x.shape[-1]} (Supported values: 256 for 8000 sample rate, 512 for 16000)")
+        speech_dict = self.vad_iterator(audio_tensor, return_seconds=True)
+
+        if speech_dict:
+            if speech_dict.get("start", None) is not None:
+                self.hear_something_timestamp = speech_dict["start"]
+                logger.debug(f"听见有人说话")
+            if speech_dict.get("end", None) is not None:
+                if self.hear_something_timestamp:
+                    logger.debug(f"说话时长: {speech_dict['end'] - self.hear_something_timestamp}")
+                    self.hear_something_timestamp = None
+            return self.hear_something_timestamp is not None
+        return self.hear_something_timestamp
+
     def transcribe_audio(self, audio_data):
         """使用FunASR转录音频"""
         try:
-            # 将字节数据转换为numpy数组
-            # audio_np = (
-            #     np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            # )
-
             # 使用FunASR进行语音识别
             result = self.model.generate(
                 input=audio_data,
@@ -167,15 +213,11 @@ class RealTimeASR:
                 ban_emo_unk=True,
                 merge_vad=True,  # 是否将 vad 模型切割的短音频碎片合成，合并后长度为merge_length_s，单位为秒s。
                 merge_length_s=15,
-                # chunk_size=[0, 10, 5],
+                chunk_size=[0, 10, 5],
             )
             logger.info(
                 f"识别结果: {rich_transcription_postprocess(result[0]['text'])}"
             )
-            # if result and len(result) > 0 and "text" in result[0]:
-            #     text = result[0]["text"]
-            #     if text.strip():
-            #         logger.info(f"识别结果: {text}")
         except Exception as e:
             logger.info(f"转录错误: {e}")
 

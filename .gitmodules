@@ -28,3 +28,6 @@
 [submodule "machine_learning/speech_recognition"]
 	path = machine_learning/speech_recognition
 	url = https://github.com/Uberi/speech_recognition.git
+[submodule "python/machine_learning/silero-vad"]
+	path = python/machine_learning/silero-vad
+	url = https://github.com/snakers4/silero-vad.git
