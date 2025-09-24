@@ -1,10 +1,32 @@
+import sys
 import threading
 import queue
 import time
 import numpy as np
 import pyaudio
 import webrtcvad
+import traceback
 from funasr import AutoModel
+from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+import logging
+
+
+# logging.basicConfig(
+#     level=logging.DEBUG,
+#     format="[%(asctime)s:.%(msecs)06d] [%(levelname)s] [%(filename)s:%(lineno)-4d] %(message)s",
+#     datefmt="%H:%M:%S:",
+# )
+logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.DEBUG)
+formatter = logging.Formatter(
+    fmt="[%(asctime)s:%(msecs)06d] [%(levelname)s] [%(filename)s:%(lineno)-4d] %(message)s",
+    datefmt="%H:%M:%S",
+)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+logger.propagate = False
 
 
 class RealTimeASR:
@@ -16,7 +38,7 @@ class RealTimeASR:
             model_size: 模型大小，可选 "small", "medium", "large"
         """
         # 初始化FunASR模型
-        print("正在加载FunASR模型...")
+        logger.info("正在加载FunASR模型...")
         if model_size == "small":
             model_dir = "/home/ga/.cache/modelscope/hub/models/iic/SenseVoiceSmall"
         elif model_size == "medium":
@@ -24,13 +46,19 @@ class RealTimeASR:
         else:
             model_dir = "paraformer-zh-streaming"
         self.model = AutoModel(
-            model=model_dir, model_revision="v2.0.4", disable_update=True
+            model=model_dir,
+            model_revision="v2.0.4",
+            vad_kwargs={
+                "max_single_segment_time": 30000
+            },  # 表示VAD模型配置,max_single_segment_time: 表示vad_model最大切割音频时长, 单位是毫秒ms。
+            device="cuda:0",
+            disable_update=True,
         )
-        print("模型加载完成")
+        logger.info("模型加载完成")
 
         # 音频参数
         self.sample_rate = 48000
-        self.chunk_size = 960  # 30ms chunks for VAD
+        self.chunk_size = 960  # 500ms chunks for VAD 48000*0.02
         self.format = pyaudio.paInt16
         self.channels = 1
 
@@ -43,6 +71,15 @@ class RealTimeASR:
 
         # 初始化PyAudio
         self.audio = pyaudio.PyAudio()
+        self.stream = self.audio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+            # stream_callback=self.audio_callback,
+        )
+
 
     def audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio回调函数，用于捕获音频数据"""
@@ -53,20 +90,11 @@ class RealTimeASR:
 
     def record_audio(self):
         """录制音频"""
-        print("开始录制音频...")
+        logger.info("开始录制音频...")
         self.is_recording = True
 
         # 打开音频流
-        stream = self.audio.open(
-            format=self.format,
-            channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            stream_callback=self.audio_callback,
-        )
-
-        stream.start_stream()
+        self.stream.start_stream()
 
         try:
             while self.is_recording:
@@ -74,28 +102,32 @@ class RealTimeASR:
         except KeyboardInterrupt:
             self.is_recording = False
 
-        stream.stop_stream()
-        stream.close()
+        self.stream.stop_stream()
+        self.stream.close()
 
     def process_audio(self):
         """处理音频数据并进行语音识别"""
         audio_buffer = b""
         silence_frames = 0
-        max_silence_frames = 20  # 最多允许20帧静音
+        max_silence_frames = 50  # 最多允许20帧静音
 
-        print("开始处理音频...")
+        logger.info("开始处理音频...")
 
-        while self.is_recording or not self.audio_queue.empty():
+        while self.is_recording:# or not self.audio_queue.empty():
             try:
                 # 从队列中获取音频数据
-                data = self.audio_queue.get(timeout=1)
-                audio_buffer += data
+                # data = self.audio_queue.get(timeout=1)
+                data = self.stream.read(self.chunk_size)
+                is_speech = False
+                if data:
+                    audio_buffer += data
 
-                # 使用VAD检测是否有语音活动
-                is_speech = self.vad.is_speech(data, self.sample_rate)
+                    # 使用VAD检测是否有语音活动
+                    is_speech = self.vad.is_speech(data, self.sample_rate)
 
                 if is_speech:
                     silence_frames = 0
+                    logger.info(f"len of audio_buffer: {len(audio_buffer)}")
                     # 如果有语音活动，继续收集数据
                     if len(audio_buffer) > self.sample_rate * 2:  # 最多收集2秒音频
                         self.transcribe_audio(audio_buffer)
@@ -110,6 +142,8 @@ class RealTimeASR:
 
             except queue.Empty:
                 continue
+            except Exception as e:
+                logger.info(f"Error {traceback.format_exc()}")
 
         # 转录剩余的音频
         if len(audio_buffer) > 0:
@@ -119,26 +153,36 @@ class RealTimeASR:
         """使用FunASR转录音频"""
         try:
             # 将字节数据转换为numpy数组
-            audio_np = (
-                np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            )
+            # audio_np = (
+            #     np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            # )
 
             # 使用FunASR进行语音识别
             result = self.model.generate(
-                input=audio_np, cache={}, is_final=True, chunk_size=[0, 10, 5]
+                input=audio_data,
+                cache={},
+                language="zn",  # "zn", "en", "yue", "ja", "ko", "nospeech"
+                use_itn=True,  # Whether the output result includes punctuation and inverse text normalization. 输出结果中是否包含标点与逆文本正则化。
+                batch_size_s=60,  # 表示采用动态batch，batch中总音频时长，单位为秒s。
+                ban_emo_unk=True,
+                merge_vad=True,  # 是否将 vad 模型切割的短音频碎片合成，合并后长度为merge_length_s，单位为秒s。
+                merge_length_s=15,
+                # chunk_size=[0, 10, 5],
             )
-
-            if result and len(result) > 0 and "text" in result[0]:
-                text = result[0]["text"]
-                if text.strip():
-                    print(f"识别结果: {text}")
+            logger.info(
+                f"识别结果: {rich_transcription_postprocess(result[0]['text'])}"
+            )
+            # if result and len(result) > 0 and "text" in result[0]:
+            #     text = result[0]["text"]
+            #     if text.strip():
+            #         logger.info(f"识别结果: {text}")
         except Exception as e:
-            print(f"转录错误: {e}")
+            logger.info(f"转录错误: {e}")
 
     def start(self):
         """启动实时语音识别"""
-        print("启动实时语音识别系统")
-        print("按Ctrl+C停止录制")
+        logger.info("启动实时语音识别系统")
+        logger.info("按Ctrl+C停止录制")
 
         # 创建录制线程
         record_thread = threading.Thread(target=self.record_audio)
@@ -155,7 +199,7 @@ class RealTimeASR:
             record_thread.join()
             process_thread.join()
         except KeyboardInterrupt:
-            print("\n正在停止录制...")
+            logger.info("\n正在停止录制...")
             self.is_recording = False
 
     def cleanup(self):
@@ -170,6 +214,6 @@ if __name__ == "__main__":
     try:
         asr_system.start()
     except Exception as e:
-        print(f"发生错误: {e}")
+        logger.info(f"发生错误: {e}")
     finally:
         asr_system.cleanup()

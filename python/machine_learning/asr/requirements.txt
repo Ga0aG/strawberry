@@ -5,7 +5,7 @@ torchvision==0.15.0
 torchaudio==2.0.0
 pytorch-cuda=11.7
 
-pyaudio
+pyaudio==0.2.12
 webrtcvad
 numpy
 soundfile
