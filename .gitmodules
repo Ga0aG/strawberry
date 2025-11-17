@@ -31,3 +31,6 @@
 [submodule "python/machine_learning/silero-vad"]
 	path = python/machine_learning/silero-vad
 	url = https://github.com/snakers4/silero-vad.git
+[submodule "others/go/golang-tutorials"]
+	path = others/go/golang-tutorials
+	url = https://github.com/Ga0aG/golang-tutorials.git
