@@ -1,0 +1,31 @@
+{
+  "name": "vue-example",
+  "version": "1.0.0",
+  "description": "Simple Vue example with counter and todo list",
+  "main": "index.js",
+  "scripts": {
+    "dev": "webpack serve --mode development",
+    "build": "webpack --mode production"
+  },
+  "keywords": [
+    "vue",
+    "example"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "vue": "^3.3.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.22.0",
+    "@babel/preset-env": "^7.22.0",
+    "@vitejs/plugin-vue": "^4.2.0",
+    "babel-loader": "^9.1.0",
+    "css-loader": "^6.8.0",
+    "style-loader": "^3.3.0",
+    "vue-loader": "^17.0.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0",
+    "webpack-dev-server": "^4.15.0"
+  }
+}
