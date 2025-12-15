@@ -1,0 +1,91 @@
+---
+- name: Restart service on remote hosts
+  hosts: robots
+  become: false
+  gather_facts: yes
+
+  vars:
+    app_name: astribot_robot_task
+    workspace_path: /home/astribot/workspace
+    # 可以通过命令行指定服务名称，例如:
+    # ansible-playbook restart_service.yml -e "service_name=robot-task.service"
+    # ansible-playbook restart_service.yml -e "service_name=upload-hdf5.service"
+    service_name: "{{ target_service | default('upload-hdf5.service') }}"
+
+  pre_tasks:
+    # 1. 检测远程设备是否在线
+    - name: STEP1.1 检测远程设备连接
+      ping:
+      register: ping_result
+      failed_when: false
+
+    - name: STEP1.2 检查设备在线状态
+      fail:
+        msg: "设备 {{ inventory_hostname }} ({{ ansible_host }}) 不在线或无法连接"
+      when: ping_result is failed
+
+    - name: STEP1.3 显示设备在线状态
+      debug:
+        msg: "设备 {{ inventory_hostname }} ({{ ansible_host }}) 在线，准备启动服务"
+
+    # 设置 robot_ip 变量（使用 ansible_host）
+    - name: STEP1.4 设置机器人IP地址
+      set_fact:
+        robot_ip: "{{ ansible_host }}"
+
+  tasks:
+    # 2. 检查并启动服务
+    - name: STEP2.1 检查服务状态
+      systemd:
+        name: "{{ service_name }}"
+      register: service_check
+      become: yes
+      failed_when: false
+
+    - name: STEP2.2 显示当前服务状态
+      debug:
+        msg: "服务当前状态: {{ service_check.status.ActiveState | default('unknown') }}"
+
+    - name: STEP2.3 重启服务
+      systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+      become: yes
+      ignore_errors: yes
+
+    - name: STEP2.4 确保服务开机自启动
+      systemd:
+        name: "{{ service_name }}"
+        enabled: yes
+      become: yes
+
+    - name: STEP2.5 等待服务完全启动
+      pause:
+        seconds: 3
+
+    - name: STEP2.6 检查最终服务状态
+      systemd:
+        name: "{{ service_name }}"
+      register: service_started
+      become: yes
+      failed_when: false
+
+    - name: STEP2.7 显示最终服务状态
+      debug:
+        msg: |
+          ==========================================
+          服务重启完成！
+          设备: {{ inventory_hostname }} ({{ ansible_host }})
+          服务名称: {{ service_name }}
+          机器人名称: {{ robot_name | default('未知') }}
+          机器人SN: {{ robot_sn | default('未知') }}
+          机器人IP: {{ robot_ip }}
+          最终服务状态: {{ service_started.status.ActiveState | default('unknown') }}
+          ==========================================
+
+    - name: STEP2.8 服务重启失败警告
+      debug:
+        msg: "警告: 服务 {{ service_name }} 重启失败或未正常运行，请手动检查"
+      when: service_started.status.ActiveState | default('unknown') != "active"

@@ -1,0 +1,396 @@
+---
+- name: Deploy robot-task to remote hosts
+  hosts: robots
+  become: false
+  gather_facts: yes
+
+  vars:
+    app_name: robot_task
+    workspace_path: /home/ga/workspace
+    service_name: robot-task.service
+    old_app_path: "{{ workspace_path }}/{{ app_name }}"
+    backup_app_path: "{{ workspace_path }}/{{ app_name }}_bak"
+    dev_app_path: "{{ workspace_path }}/{{ app_name }}_dev"
+    force_update: false  # 强制更新，即使版本号相同也更新
+
+  pre_tasks:
+    # 1. 检测远程设备是否在线
+    - name: STEP1.1 检测远程设备连接
+      ping:
+      register: ping_result
+      failed_when: false
+
+    - name: STEP1.2 检查设备在线状态
+      fail:
+        msg: "设备 {{ inventory_hostname }} ({{ ansible_host }}) 不在线或无法连接"
+      when: ping_result is failed
+
+    - name: STEP1.3 显示设备在线状态
+      debug:
+        msg: "设备 {{ inventory_hostname }} ({{ ansible_host }}) 在线，准备部署"
+
+    # 设置 robot_ip 变量（使用 ansible_host）
+    - name: STEP1.4 设置机器人IP地址
+      set_fact:
+        robot_ip: "{{ ansible_host }}"
+
+    # 检查必需的变量
+    - name: STEP1.5 检查必需的变量
+      fail:
+        msg: "缺少必需的变量: robot_name={{ robot_name | default('未设置') }}, robot_sn={{ robot_sn | default('未设置') }}"
+      when: robot_name is not defined or robot_sn is not defined
+
+  tasks:
+    # 2. 读取原先代码的版本
+    - name: STEP2.1 读取当前版本信息
+      slurp:
+        src: "{{ old_app_path }}/VERSION"
+      register: version_file
+      ignore_errors: yes
+      failed_when: false
+
+    - name: STEP2.2 显示当前版本
+      debug:
+        msg: |
+          当前版本信息:
+          {{ version_file.content | b64decode }}
+      when: version_file is succeeded and version_file.content is defined
+
+    - name: STEP2.3 提取远程版本号
+      set_fact:
+        remote_version: "{{ (version_file.content | b64decode | regex_search('Base Version: ([0-9.]+)', '\\1')) | first | default('') }}"
+      when: version_file is succeeded and version_file.content is defined
+
+    - name: STEP2.4 设置远程版本号为空（首次部署）
+      set_fact:
+        remote_version: ""
+      when: version_file is failed or version_file.content is not defined or remote_version is not defined
+
+    - name: STEP2.5 显示远程版本号
+      debug:
+        msg: "远程版本号: {{ remote_version | default('无（首次部署）') }}"
+
+    # 3. 在本地查找最新的 arm64 zip 包
+    - name: STEP3.1 查找最新的 arm64 zip 包
+      find:
+        paths: "{{ playbook_dir }}/../release"
+        patterns: "*-linux-arm64.zip"
+        file_type: file
+      register: zip_files
+      delegate_to: localhost
+      run_once: true
+
+    - name: STEP3.2 确认找到 zip 文件
+      fail:
+        msg: "未找到 arm64 zip 包！请检查 release 目录"
+      when: zip_files.matched == 0
+      delegate_to: localhost
+      run_once: true
+
+    - name: STEP3.3 获取最新的 zip 文件
+      set_fact:
+        latest_zip: "{{ (zip_files.files | sort(attribute='mtime', reverse=true) | first).path }}"
+        zip_filename: "{{ (zip_files.files | sort(attribute='mtime', reverse=true) | first).path | basename }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: STEP3.4 显示要部署的包
+      debug:
+        msg: "准备部署: {{ zip_filename }} ({{ latest_zip }})"
+
+    - name: STEP3.5 从zip文件名提取版本号
+      set_fact:
+        zip_version: "{{ zip_filename | regex_search('record_task_info-([0-9.]+)-', '\\1') | first | default('') }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: STEP3.6 显示版本号比较结果
+      debug:
+        msg: |
+          版本号比较:
+          - 远程版本: {{ remote_version | default('无（首次部署）') }}
+          - 部署版本: {{ zip_version | default('无法提取') }}
+          - 强制更新: {{ force_update | bool }}
+
+    - name: STEP3.7 判断是否需要更新
+      set_fact:
+        need_update: "{{ (remote_version == '' or remote_version != zip_version) or (force_update | bool) }}"
+      when: zip_version is defined and zip_version != ""
+
+    - name: STEP3.7.1 无法提取版本号时的处理
+      set_fact:
+        need_update: true
+      when: zip_version is not defined or zip_version == ""
+
+    - name: STEP3.8 版本号相同，跳过部署
+      debug:
+        msg: |
+          ==========================================
+          版本号相同，跳过部署
+          设备: {{ inventory_hostname }} ({{ ansible_host }})
+          机器人名称: {{ robot_name }}
+          机器人SN: {{ robot_sn }}
+          机器人IP: {{ robot_ip }}
+          远程版本: {{ remote_version }}
+          部署版本: {{ zip_version }}
+          如需强制更新，请使用: ansible-playbook deploy.yml -e force_update=true
+          ==========================================
+      when: need_update is defined and need_update == false
+
+    # 部署任务块：仅在需要更新时执行
+    - name: 部署任务块
+      block:
+        - name: STEP3.9 继续部署（版本不同或强制更新）
+          debug:
+            msg: "版本不同或强制更新，继续部署流程"
+
+        # 拷贝 zip 包到远程
+        - name: STEP3.10 拷贝 zip 包到远程设备
+          copy:
+            src: "{{ latest_zip }}"
+            dest: "{{ workspace_path }}/{{ zip_filename }}"
+            mode: '0644'
+
+        # 4. 解压 zip 文件并重命名
+        - name: STEP4.1 检查 dev 目录是否已存在
+          stat:
+            path: "{{ dev_app_path }}"
+          register: dev_dir_exists
+
+        - name: STEP4.2 删除已存在的 dev 目录
+          file:
+            path: "{{ dev_app_path }}"
+            state: absent
+          when: dev_dir_exists.stat.exists
+
+        - name: STEP4.3 解压 zip 文件到临时目录
+          unarchive:
+            src: "{{ workspace_path }}/{{ zip_filename }}"
+            dest: "{{ workspace_path }}"
+            remote_src: yes
+
+        - name: STEP4.4 查找解压后的目录
+          find:
+            paths: "{{ workspace_path }}"
+            patterns: "record_task_info-*"
+            file_type: directory
+            excludes: "{{ app_name }}*"
+          register: extracted_dirs
+
+        - name: STEP4.5 确认找到解压目录
+          fail:
+            msg: "解压后未找到 record_task_info-* 目录"
+          when: extracted_dirs.matched == 0
+
+        - name: STEP4.6 获取最新的解压目录路径
+          set_fact:
+            extracted_directory_path: "{{ extracted_dirs.files | sort(attribute='mtime', reverse=true) | first }}"
+
+        - name: STEP4.7 获取解压目录名
+          set_fact:
+            extracted_directory: "{{ extracted_directory_path.path | basename }}"
+          when: extracted_directory_path is defined
+
+        - name: STEP4.8 显示解压目录名
+          debug:
+            msg: "找到解压目录: {{ extracted_directory }} (完整路径: {{ extracted_directory_path.path }})"
+
+        - name: STEP4.9 重命名解压的文件夹为 robot_task_dev
+          command: mv "{{ extracted_directory_path.path }}" "{{ dev_app_path }}"
+          when: extracted_directory_path is defined
+
+        - name: STEP4.10 确认 dev 目录存在
+          stat:
+            path: "{{ dev_app_path }}"
+          register: dev_dir_stat
+
+        - name: STEP4.11 确认 dev 目录创建成功
+          fail:
+            msg: "无法创建 {{ dev_app_path }} 目录"
+          when: not dev_dir_stat.stat.exists
+
+        # 5. 使用模板创建配置文件
+        - name: STEP5.1 创建配置文件
+          template:
+            src: "templates/config.yaml.j2"
+            dest: "{{ dev_app_path }}/config/config.yaml"
+            mode: '0644'
+
+        # 6. 拷贝日志和数据库
+        - name: STEP5.2 检查旧版本是否存在
+          stat:
+            path: "{{ old_app_path }}"
+          register: old_version
+
+        - name: STEP5.3 创建必要的目录
+          file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0755'
+          loop:
+            - "{{ dev_app_path }}/log"
+            - "{{ dev_app_path }}/data"
+          when: old_version.stat.exists
+
+        - name: STEP5.4 检查日志目录是否存在
+          stat:
+            path: "{{ old_app_path }}/log"
+          register: log_dir
+          when: old_version.stat.exists
+
+        - name: STEP5.5 拷贝日志文件
+          shell: |
+            if [ -d "{{ old_app_path }}/log" ] && [ "$(ls -A {{ old_app_path }}/log 2>/dev/null)" ]; then
+              cp -r {{ old_app_path }}/log/* {{ dev_app_path }}/log/ 2>/dev/null || true
+            fi
+          when: old_version.stat.exists and log_dir.stat.exists
+          ignore_errors: yes
+
+        - name: STEP5.6 检查数据库文件是否存在
+          stat:
+            path: "{{ old_app_path }}/data/record_task.db"
+          register: db_file
+          when: old_version.stat.exists
+
+        - name: STEP5.7 拷贝数据库文件
+          copy:
+            src: "{{ old_app_path }}/data/record_task.db"
+            dest: "{{ dev_app_path }}/data/record_task.db"
+            remote_src: yes
+            mode: '0644'
+          when: old_version.stat.exists and db_file.stat.exists
+          ignore_errors: yes
+
+        - name: STEP5.8 设置数据库文件权限
+          file:
+            path: "{{ dev_app_path }}/data/record_task.db"
+            mode: '0644'
+          when: old_version.stat.exists and db_file.stat.exists
+
+        # 7. 停止服务
+        - name: STEP7.1 检查服务是否存在
+          systemd:
+            name: "{{ service_name }}"
+          register: service_check
+          become: yes
+          failed_when: false
+
+        - name: STEP7.2 显示服务状态
+          debug:
+            msg: "服务当前状态: {{ service_check.status.ActiveState | default('unknown') }}"
+
+        - name: STEP7.3 停止服务
+          systemd:
+            name: "{{ service_name }}"
+            state: stopped
+          become: yes
+          when: service_check.status.ActiveState is defined and service_check.status.ActiveState not in ["inactive", "failed"]
+          ignore_errors: yes
+
+        - name: STEP7.4 等待服务完全停止
+          pause:
+            seconds: 3
+
+        - name: STEP7.5 确认服务已停止
+          systemd:
+            name: "{{ service_name }}"
+          register: service_stopped
+          become: yes
+          failed_when: service_stopped.status.ActiveState not in ["inactive", "failed"]
+
+        # 8. 备份旧版本
+        - name: STEP8.1 检查备份目录是否存在
+          stat:
+            path: "{{ backup_app_path }}"
+          register: backup_exists
+          when: old_version.stat.exists
+
+        - name: STEP8.2 删除旧的备份（如果存在）
+          file:
+            path: "{{ backup_app_path }}"
+            state: absent
+          when: old_version.stat.exists and backup_exists.stat.exists
+
+        - name: STEP8.3 备份当前版本
+          command: mv "{{ old_app_path }}" "{{ backup_app_path }}"
+          when: old_version.stat.exists
+
+        # 9. 部署新版本
+        - name: STEP9.1 部署新版本（重命名 dev 为正式目录）
+          command: mv "{{ dev_app_path }}" "{{ old_app_path }}"
+
+        - name: STEP9.2 设置可执行权限
+          file:
+            path: "{{ old_app_path }}/bin/record_task_info"
+            mode: '0755'
+
+        # 10. 重启服务
+        - name: STEP10.1 启动服务
+          systemd:
+            name: "{{ service_name }}"
+            state: started
+            enabled: yes
+            daemon_reload: yes
+          become: yes
+
+        - name: STEP10.2 等待服务启动
+          pause:
+            seconds: 5
+
+        - name: STEP10.3 检查服务状态
+          systemd:
+            name: "{{ service_name }}"
+          become: yes
+          register: service_status
+
+        - name: STEP10.4 显示服务状态
+          debug:
+            msg: |
+              服务状态: {{ service_status.status.ActiveState }}
+              服务是否运行: {{ '是' if service_status.status.ActiveState == 'active' else '否' }}
+
+        - name: STEP10.5 服务启动失败警告
+          debug:
+            msg: "警告: 服务可能未正常启动，请手动检查"
+          when: service_status.status.ActiveState != "active"
+
+        # 11. 清理临时文件
+        - name: STEP11.1 删除 zip 文件
+          file:
+            path: "{{ workspace_path }}/{{ zip_filename }}"
+            state: absent
+
+        # 显示新版本信息
+        - name: STEP11.2 读取新版本信息
+          slurp:
+            src: "{{ old_app_path }}/VERSION"
+          register: new_version_file
+          # ignore_errors: yes
+          failed_when: false
+
+        - name: STEP11.3 显示部署成功信息
+          debug:
+            msg: |
+              ==========================================
+              部署成功！
+              设备: {{ inventory_hostname }} ({{ ansible_host }})
+              机器人名称: {{ robot_name }}
+              机器人SN: {{ robot_sn }}
+              机器人IP: {{ robot_ip }}
+              新版本信息:
+              {{ new_version_file.content | b64decode if (new_version_file is succeeded and new_version_file.content is defined) else '无法读取版本信息' }}
+              ==========================================
+          when: new_version_file is succeeded and new_version_file.content is defined
+
+        - name: STEP11.4 显示部署完成（无版本信息）
+          debug:
+            msg: |
+              ==========================================
+              部署完成！
+              设备: {{ inventory_hostname }} ({{ ansible_host }})
+              机器人名称: {{ robot_name }}
+              机器人SN: {{ robot_sn }}
+              机器人IP: {{ robot_ip }}
+              ==========================================
+          when: new_version_file is failed or new_version_file.content is not defined
+      when: need_update is defined and need_update == true
