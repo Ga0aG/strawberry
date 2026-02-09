@@ -1,0 +1,688 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+    Fast-DDS 默认配置文件示例
+    文件名: DEFAULT_FASTRTPS_PROFILES.xml 或通过环境变量 FASTRTPS_DEFAULT_PROFILES_FILE 指定
+
+    XML 层级结构说明:
+    <dds>                                    # 根元素
+        <profiles>                           # 配置文件集合
+            <library_settings>               # 库全局设置
+            <transport_descriptors>          # 传输层描述符列表
+            <participant>                    # DomainParticipant 配置
+            <publisher>                      # Publisher/DataWriter 配置
+            <subscriber>                     # Subscriber/DataReader 配置
+            <requester>                      # 请求者配置（RPC）
+            <replier>                        # 应答者配置（RPC）
+        <types>                              # 动态类型定义
+        <log>                                # 日志配置
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+
+    <!-- ========================================
+         第一层：profiles - 所有配置文件的容器
+         ======================================== -->
+    <profiles>
+
+        <!-- ========================================
+             库全局设置 (Library Settings)
+             控制进程内通信等全局行为
+             ======================================== -->
+        <library_settings>
+            <!-- 进程内传输模式: OFF | USER_DATA_ONLY | FULL -->
+            <intraprocess_delivery>FULL</intraprocess_delivery>
+        </library_settings>
+
+        <!-- ========================================
+             传输层描述符 (Transport Descriptors)
+             定义网络传输层配置（UDP/TCP/SHM）
+             ======================================== -->
+        <transport_descriptors>
+            <!-- UDPv4 传输描述符 -->
+            <transport_descriptor>
+                <transport_id>udp_transport</transport_id>
+                <type>UDPv4</type>
+                <sendBufferSize>65536</sendBufferSize>
+                <receiveBufferSize>65536</receiveBufferSize>
+                <TTL>1</TTL>
+                <non_blocking_send>false</non_blocking_send>
+                <maxMessageSize>65500</maxMessageSize>
+                <maxInitialPeersRange>4</maxInitialPeersRange>
+                <interfaceWhiteList>
+                    <address>127.0.0.1</address>
+                    <address>192.168.1.0</address>
+                </interfaceWhiteList>
+            </transport_descriptor>
+
+            <!-- TCPv4 传输描述符 -->
+            <transport_descriptor>
+                <transport_id>tcp_transport</transport_id>
+                <type>TCPv4</type>
+                <sendBufferSize>65536</sendBufferSize>
+                <receiveBufferSize>65536</receiveBufferSize>
+                <keep_alive_frequency_ms>5000</keep_alive_frequency_ms>
+                <keep_alive_timeout_ms>15000</keep_alive_timeout_ms>
+                <max_logical_port>65535</max_logical_port>
+                <logical_port_range>20</logical_port_range>
+                <logical_port_increment>2</logical_port_increment>
+                <listening_ports>
+                    <port>5100</port>
+                    <port>5101</port>
+                </listening_ports>
+                <enable_tcp_nodelay>true</enable_tcp_nodelay>
+            </transport_descriptor>
+
+            <!-- 共享内存传输描述符 -->
+            <transport_descriptor>
+                <transport_id>shm_transport</transport_id>
+                <type>SHM</type>
+                <segment_size>524288</segment_size>
+                <port_queue_capacity>512</port_queue_capacity>
+                <healthy_check_timeout_ms>1000</healthy_check_timeout_ms>
+            </transport_descriptor>
+        </transport_descriptors>
+
+        <!-- ========================================
+             DomainParticipant 配置文件
+             定义参与者的网络、发现、资源分配等
+             ======================================== -->
+        <participant profile_name="default_participant_profile" is_default_profile="true">
+            <!-- 域 ID，默认值: 0 -->
+            <domainId>0</domainId>
+
+            <!-- RTPS 协议配置 -->
+            <rtps>
+                <!-- 资源分配配置 -->
+                <allocation>
+                    <remote_locators>
+                        <max_unicast_locators>4</max_unicast_locators>
+                        <max_multicast_locators>1</max_multicast_locators>
+                    </remote_locators>
+                    <total_participants>
+                        <initial>0</initial>
+                        <maximum>0</maximum>
+                        <increment>1</increment>
+                    </total_participants>
+                    <total_readers>
+                        <initial>0</initial>
+                        <maximum>0</maximum>
+                        <increment>1</increment>
+                    </total_readers>
+                    <total_writers>
+                        <initial>0</initial>
+                        <maximum>0</maximum>
+                        <increment>1</increment>
+                    </total_writers>
+                    <send_buffers>
+                        <preallocated_number>0</preallocated_number>
+                        <dynamic>true</dynamic>
+                    </send_buffers>
+                </allocation>
+
+                <!-- 默认单播定位器列表 -->
+                <defaultUnicastLocatorList>
+                    <locator>
+                        <udpv4>
+                            <port>0</port>
+                            <address>0.0.0.0</address>
+                        </udpv4>
+                    </locator>
+                </defaultUnicastLocatorList>
+
+                <!-- 默认组播定位器列表 -->
+                <defaultMulticastLocatorList>
+                    <locator>
+                        <udpv4>
+                            <port>0</port>
+                            <address>239.255.0.1</address>
+                        </udpv4>
+                    </locator>
+                </defaultMulticastLocatorList>
+
+                <!-- 套接字缓冲区大小 -->
+                <sendSocketBufferSize>0</sendSocketBufferSize>
+                <listenSocketBufferSize>0</listenSocketBufferSize>
+
+                <!-- 内置端点配置 -->
+                <builtin>
+                    <!-- 发现配置 -->
+                    <discovery_config>
+                        <!-- 发现协议: SIMPLE | CLIENT | SERVER | BACKUP | SUPER_CLIENT | NONE -->
+                        <discoveryProtocol>SIMPLE</discoveryProtocol>
+
+                        <!-- 端点发现协议: SIMPLE | STATIC -->
+                        <EDP>SIMPLE</EDP>
+
+                        <!-- 忽略参与者标志 -->
+                        <ignoreParticipantFlags>FILTER_DIFFERENT_PROCESS</ignoreParticipantFlags>
+
+                        <!-- 租约公告周期 -->
+                        <leaseAnnouncement>
+                            <sec>3</sec>
+                            <nanosec>0</nanosec>
+                        </leaseAnnouncement>
+
+                        <!-- 租约持续时间 -->
+                        <leaseDuration>
+                            <sec>20</sec>
+                            <nanosec>0</nanosec>
+                        </leaseDuration>
+
+                        <!-- 初始公告 -->
+                        <initialAnnouncements>
+                            <count>5</count>
+                            <period>
+                                <sec>0</sec>
+                                <nanosec>100000000</nanosec>
+                            </period>
+                        </initialAnnouncements>
+
+                        <!-- 简单 EDP 配置 -->
+                        <simpleEDP>
+                            <PUBWRITER_SUBREADER>true</PUBWRITER_SUBREADER>
+                            <PUBREADER_SUBWRITER>true</PUBREADER_SUBWRITER>
+                        </simpleEDP>
+                    </discovery_config>
+
+                    <!-- 避免内置组播 -->
+                    <avoid_builtin_multicast>false</avoid_builtin_multicast>
+
+                    <!-- 使用 Writer 活跃性协议 -->
+                    <use_WriterLivelinessProtocol>true</use_WriterLivelinessProtocol>
+
+                    <!-- 元流量单播定位器列表 -->
+                    <metatrafficUnicastLocatorList>
+                        <locator>
+                            <udpv4>
+                                <port>0</port>
+                                <address>0.0.0.0</address>
+                            </udpv4>
+                        </locator>
+                    </metatrafficUnicastLocatorList>
+
+                    <!-- 元流量组播定位器列表 -->
+                    <metatrafficMulticastLocatorList>
+                        <locator>
+                            <udpv4>
+                                <port>0</port>
+                                <address>239.255.0.1</address>
+                            </udpv4>
+                        </locator>
+                    </metatrafficMulticastLocatorList>
+
+                    <!-- 初始对等节点列表 -->
+                    <initialPeersList>
+                        <locator>
+                            <udpv4>
+                                <port>7400</port>
+                                <address>127.0.0.1</address>
+                            </udpv4>
+                        </locator>
+                    </initialPeersList>
+
+                    <!-- 历史内存策略 -->
+                    <readerHistoryMemoryPolicy>PREALLOCATED</readerHistoryMemoryPolicy>
+                    <writerHistoryMemoryPolicy>PREALLOCATED</writerHistoryMemoryPolicy>
+
+                    <!-- 负载大小 -->
+                    <readerPayloadSize>512</readerPayloadSize>
+                    <writerPayloadSize>512</writerPayloadSize>
+
+                    <!-- 变异尝试次数 -->
+                    <mutation_tries>100</mutation_tries>
+                </builtin>
+
+                <!-- 端口配置 -->
+                <port>
+                    <portBase>7400</portBase>
+                    <domainIDGain>250</domainIDGain>
+                    <participantIDGain>2</participantIDGain>
+                    <offsetd0>0</offsetd0>
+                    <offsetd1>10</offsetd1>
+                    <offsetd2>1</offsetd2>
+                    <offsetd3>11</offsetd3>
+                </port>
+
+                <!-- 参与者 ID，默认值: 0 -->
+                <participantID>0</participantID>
+
+                <!-- 吞吐量控制器 -->
+                <throughputController>
+                    <bytesPerPeriod>4294967295</bytesPerPeriod>
+                    <periodMillisecs>0</periodMillisecs>
+                </throughputController>
+
+                <!-- 流控制器描述符列表 -->
+                <flow_controller_descriptor_list>
+                    <flow_controller_descriptor>
+                        <name>custom_flow_controller</name>
+                        <scheduler>FIFO</scheduler>
+                        <max_bytes_per_period>1048576</max_bytes_per_period>
+                        <period_ms>100</period_ms>
+                    </flow_controller_descriptor>
+                </flow_controller_descriptor_list>
+
+                <!-- 用户传输 -->
+                <userTransports>
+                    <id>udp_transport</id>
+                </userTransports>
+
+                <!-- 使用内置传输 -->
+                <useBuiltinTransports>true</useBuiltinTransports>
+
+                <!-- 参与者名称 -->
+                <name>default_participant</name>
+
+                <!-- 用户数据 -->
+                <userData>
+                    <value>00.00.00.00</value>
+                </userData>
+
+                <!-- 属性策略 -->
+                <propertiesPolicy>
+                    <properties>
+                        <property>
+                            <name>fastdds.application.id</name>
+                            <value>UNKNOWN</value>
+                            <propagate>false</propagate>
+                        </property>
+                    </properties>
+                </propertiesPolicy>
+            </rtps>
+        </participant>
+
+        <!-- ========================================
+             Publisher/DataWriter 配置文件
+             定义发布者的 QoS、主题、定位器等
+             ======================================== -->
+        <publisher profile_name="default_publisher_profile" is_default_profile="true">
+            <!-- 主题配置 -->
+            <topic>
+                <!-- 主题类型: NO_KEY | WITH_KEY -->
+                <kind>NO_KEY</kind>
+                <name>DefaultTopic</name>
+                <dataType>DefaultType</dataType>
+
+                <!-- 历史 QoS -->
+                <historyQos>
+                    <!-- 历史类型: KEEP_LAST | KEEP_ALL -->
+                    <kind>KEEP_LAST</kind>
+                    <depth>1</depth>
+                </historyQos>
+
+                <!-- 资源限制 QoS -->
+                <resourceLimitsQos>
+                    <max_samples>5000</max_samples>
+                    <max_instances>10</max_instances>
+                    <max_samples_per_instance>400</max_samples_per_instance>
+                    <allocated_samples>100</allocated_samples>
+                </resourceLimitsQos>
+            </topic>
+
+            <!-- QoS 策略 -->
+            <qos>
+                <!-- 持久性: VOLATILE | TRANSIENT_LOCAL | TRANSIENT | PERSISTENT -->
+                <durability>
+                    <kind>VOLATILE</kind>
+                </durability>
+
+                <!-- 截止时间 -->
+                <deadline>
+                    <period>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </period>
+                </deadline>
+
+                <!-- 延迟预算 -->
+                <latencyBudget>
+                    <duration>
+                        <sec>0</sec>
+                        <nanosec>0</nanosec>
+                    </duration>
+                </latencyBudget>
+
+                <!-- 活跃性: AUTOMATIC | MANUAL_BY_PARTICIPANT | MANUAL_BY_TOPIC -->
+                <liveliness>
+                    <kind>AUTOMATIC</kind>
+                    <lease_duration>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </lease_duration>
+                    <announcement_period>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </announcement_period>
+                </liveliness>
+
+                <!-- 可靠性: BEST_EFFORT | RELIABLE -->
+                <reliability>
+                    <kind>RELIABLE</kind>
+                    <max_blocking_time>
+                        <sec>0</sec>
+                        <nanosec>100000000</nanosec>
+                    </max_blocking_time>
+                </reliability>
+
+                <!-- 生命周期 -->
+                <lifespan>
+                    <duration>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </duration>
+                </lifespan>
+
+                <!-- 所有权: SHARED | EXCLUSIVE -->
+                <ownership>
+                    <kind>SHARED</kind>
+                </ownership>
+
+                <!-- 所有权强度 -->
+                <ownershipStrength>
+                    <value>0</value>
+                </ownershipStrength>
+
+                <!-- 目标顺序: BY_RECEPTION_TIMESTAMP | BY_SOURCE_TIMESTAMP -->
+                <destinationOrder>
+                    <kind>BY_RECEPTION_TIMESTAMP</kind>
+                </destinationOrder>
+
+                <!-- 表示 -->
+                <presentation>
+                    <access_scope>INSTANCE</access_scope>
+                    <coherent_access>false</coherent_access>
+                    <ordered_access>false</ordered_access>
+                </presentation>
+
+                <!-- 分区 -->
+                <partition>
+                    <names>
+                        <name>default_partition</name>
+                    </names>
+                </partition>
+
+                <!-- 发布模式: SYNCHRONOUS | ASYNCHRONOUS -->
+                <publishMode>
+                    <kind>SYNCHRONOUS</kind>
+                </publishMode>
+
+                <!-- 禁用正向确认 -->
+                <disablePositiveAcks>
+                    <enabled>false</enabled>
+                    <duration>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </duration>
+                </disablePositiveAcks>
+
+                <!-- 数据共享 -->
+                <data_sharing>
+                    <kind>AUTO</kind>
+                    <shared_dir></shared_dir>
+                    <max_domains>0</max_domains>
+                </data_sharing>
+
+                <!-- 用户数据 -->
+                <userData>
+                    <value>00.00.00.00</value>
+                </userData>
+
+                <!-- 主题数据 -->
+                <topicData>
+                    <value>00.00.00.00</value>
+                </topicData>
+
+                <!-- 组数据 -->
+                <groupData>
+                    <value>00.00.00.00</value>
+                </groupData>
+            </qos>
+
+            <!-- Writer 时间配置 -->
+            <times>
+                <initialHeartbeatDelay>
+                    <sec>0</sec>
+                    <nanosec>12000000</nanosec>
+                </initialHeartbeatDelay>
+                <heartbeatPeriod>
+                    <sec>3</sec>
+                    <nanosec>0</nanosec>
+                </heartbeatPeriod>
+                <nackResponseDelay>
+                    <sec>0</sec>
+                    <nanosec>5000000</nanosec>
+                </nackResponseDelay>
+                <nackSupressionDuration>
+                    <sec>0</sec>
+                    <nanosec>0</nanosec>
+                </nackSupressionDuration>
+            </times>
+
+            <!-- 单播定位器列表 -->
+            <unicastLocatorList>
+                <locator>
+                    <udpv4>
+                        <port>0</port>
+                        <address>0.0.0.0</address>
+                    </udpv4>
+                </locator>
+            </unicastLocatorList>
+
+            <!-- 组播定位器列表 -->
+            <multicastLocatorList>
+                <locator>
+                    <udpv4>
+                        <port>0</port>
+                        <address>239.255.0.1</address>
+                    </udpv4>
+                </locator>
+            </multicastLocatorList>
+
+            <!-- 历史内存策略: PREALLOCATED | PREALLOCATED_WITH_REALLOC | DYNAMIC | DYNAMIC_REUSABLE -->
+            <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+
+            <!-- 用户定义 ID -->
+            <userDefinedID>-1</userDefinedID>
+
+            <!-- 实体 ID -->
+            <entityID>-1</entityID>
+
+            <!-- 匹配订阅者分配 -->
+            <matchedSubscribersAllocation>
+                <initial>0</initial>
+                <maximum>0</maximum>
+                <increment>1</increment>
+            </matchedSubscribersAllocation>
+        </publisher>
+
+        <!-- ========================================
+             Subscriber/DataReader 配置文件
+             定义订阅者的 QoS、主题、定位器等
+             ======================================== -->
+        <subscriber profile_name="default_subscriber_profile" is_default_profile="true">
+            <!-- 主题配置 -->
+            <topic>
+                <kind>NO_KEY</kind>
+                <name>DefaultTopic</name>
+                <dataType>DefaultType</dataType>
+
+                <historyQos>
+                    <kind>KEEP_LAST</kind>
+                    <depth>1</depth>
+                </historyQos>
+
+                <resourceLimitsQos>
+                    <max_samples>5000</max_samples>
+                    <max_instances>10</max_instances>
+                    <max_samples_per_instance>400</max_samples_per_instance>
+                    <allocated_samples>100</allocated_samples>
+                </resourceLimitsQos>
+            </topic>
+
+            <!-- QoS 策略 -->
+            <qos>
+                <durability>
+                    <kind>VOLATILE</kind>
+                </durability>
+
+                <deadline>
+                    <period>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </period>
+                </deadline>
+
+                <latencyBudget>
+                    <duration>
+                        <sec>0</sec>
+                        <nanosec>0</nanosec>
+                    </duration>
+                </latencyBudget>
+
+                <liveliness>
+                    <kind>AUTOMATIC</kind>
+                    <lease_duration>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </lease_duration>
+                    <announcement_period>
+                        <sec>2147483647</sec>
+                        <nanosec>4294967295</nanosec>
+                    </announcement_period>
+                </liveliness>
+
+                <reliability>
+                    <kind>BEST_EFFORT</kind>
+                    <max_blocking_time>
+                        <sec>0</sec>
+                        <nanosec>100000000</nanosec>
+                    </max_blocking_time>
+                </reliability>
+
+                <ownership>
+                    <kind>SHARED</kind>
+                </ownership>
+
+                <destinationOrder>
+                    <kind>BY_RECEPTION_TIMESTAMP</kind>
+                </destinationOrder>
+
+                <!-- 基于时间的过滤器 -->
+                <timeBasedFilter>
+                    <minimum_separation>
+                        <sec>0</sec>
+                        <nanosec>0</nanosec>
+                    </minimum_separation>
+                </timeBasedFilter>
+
+                <presentation>
+                    <access_scope>INSTANCE</access_scope>
+                    <coherent_access>false</coherent_access>
+                    <ordered_access>false</ordered_access>
+                </presentation>
+
+                <partition>
+                    <names>
+                        <name>default_partition</name>
+                    </names>
+                </partition>
+
+                <data_sharing>
+                    <kind>AUTO</kind>
+                    <shared_dir></shared_dir>
+                    <max_domains>0</max_domains>
+                </data_sharing>
+
+                <userData>
+                    <value>00.00.00.00</value>
+                </userData>
+
+                <topicData>
+                    <value>00.00.00.00</value>
+                </topicData>
+
+                <groupData>
+                    <value>00.00.00.00</value>
+                </groupData>
+            </qos>
+
+            <!-- Reader 时间配置 -->
+            <times>
+                <initialAcknackDelay>
+                    <sec>0</sec>
+                    <nanosec>70000000</nanosec>
+                </initialAcknackDelay>
+                <heartbeatResponseDelay>
+                    <sec>0</sec>
+                    <nanosec>5000000</nanosec>
+                </heartbeatResponseDelay>
+            </times>
+
+            <unicastLocatorList>
+                <locator>
+                    <udpv4>
+                        <port>0</port>
+                        <address>0.0.0.0</address>
+                    </udpv4>
+                </locator>
+            </unicastLocatorList>
+
+            <multicastLocatorList>
+                <locator>
+                    <udpv4>
+                        <port>0</port>
+                        <address>239.255.0.1</address>
+                    </udpv4>
+                </locator>
+            </multicastLocatorList>
+
+            <!-- 期望内联 QoS -->
+            <expectsInlineQos>false</expectsInlineQos>
+
+            <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+
+            <userDefinedID>-1</userDefinedID>
+
+            <entityID>-1</entityID>
+
+            <!-- 匹配发布者分配 -->
+            <matchedPublishersAllocation>
+                <initial>0</initial>
+                <maximum>0</maximum>
+                <increment>1</increment>
+            </matchedPublishersAllocation>
+        </subscriber>
+
+    </profiles>
+
+    <!-- ========================================
+         动态类型定义 (Types)
+         定义数据类型结构
+         ======================================== -->
+    <types>
+        <!-- 结构体示例 -->
+        <struct name="HelloWorld">
+            <member name="index" type="uint32"/>
+            <member name="message" type="string"/>
+        </struct>
+
+        <!-- 枚举示例 -->
+        <enum name="Color">
+            <enumerator name="RED" value="0"/>
+            <enumerator name="GREEN" value="1"/>
+            <enumerator name="BLUE" value="2"/>
+        </enum>
+    </types>
+
+    <!-- ========================================
+         日志配置 (Log)
+         配置日志输出
+         ======================================== -->
+    <log>
+        <use_default>true</use_default>
+        <consumer>
+            <class>StdoutConsumer</class>
+        </consumer>
+    </log>
+
+</dds>
+
