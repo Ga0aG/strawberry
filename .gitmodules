@@ -16,14 +16,14 @@
 [submodule "python/web/grpc"]
 	path = python/web/grpc
 	url = https://github.com/grpc/grpc
-[submodule "others/typescripts/typescript-from-zero"]
-	path = others/typescripts/typescript-from-zero
+[submodule "web/typescripts/typescript-from-zero"]
+	path = web/typescripts/typescript-from-zero
 	url = https://github.com/jeffsieu/typescript-from-zero.git
 [submodule "python/opencv_tutorial"]
 	path = python/opencv_tutorial
 	url = https://github.com/ex2tron/OpenCV-Python-Tutorial.git
-[submodule "machine_learning/FunASR"]
-	path = machine_learning/FunASR
+[submodule "python/machine_learning/FunASR"]
+	path = python/machine_learning/FunASR
 	url = https://github.com/modelscope/FunASR.gi
 [submodule "machine_learning/speech_recognition"]
 	path = machine_learning/speech_recognition
@@ -31,6 +31,6 @@
 [submodule "python/machine_learning/silero-vad"]
 	path = python/machine_learning/silero-vad
 	url = https://github.com/snakers4/silero-vad.git
-[submodule "others/go/golang-tutorials"]
-	path = others/go/golang-tutorials
+[submodule "web/go/golang-tutorials"]
+	path = web/go/golang-tutorials
 	url = https://github.com/Ga0aG/golang-tutorials.git
