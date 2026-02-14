@@ -1,5 +1,5 @@
 代码可以参考eProsima/Fast-DDS下的代码
-不要修改“问题描述”，只要在“问题回答”里面更新就行，并在不断的更新不要让文档变得混乱，要保持逻辑层级的清晰可读。
+不要修改“问题描述”，只要在“问题回答”里面更新就行，并在不断的更新中不要让文档变得混乱，要保持逻辑层级的清晰可读。
 
 
 # 问题描述
@@ -266,18 +266,9 @@ sudo sysctl -w net.core.wmem_max=67108864 # 64MB
 ```
 
 ## 问题:
-1. 为什么用户电脑需要设置receiveBufferSize和sendBufferSize之后才能收到点云数据
-    - x86上能够正常接收到雷达数据
-    - 用户电脑用的CAT 6的网线连的交换机，网线长1m, 比x86的网线要长一些
-1. 节点订阅数据的完整链路
-    - 从socket接收到数据，到fastdds的receiveBufferSize，再到应用程序的解析的完整链路，重点解释其中缓存起到的作用
-1. 用户电脑上收到雷达数据频率不稳定
-    - 为什么x86上收到的雷达数据是稳定的10Hz, 用户电脑就很容易波动，一会儿8hz, 一会儿0.5hz的,会丢数据。
-    - 用户收到的雷达数据情况如下，刚开始会比较稳定的接收，一次丢个1帧，但是差不多9s以后，就会突然顿住，丢了100来帧，然后又恢复
-    - 如果关掉网络，unset FASTRTPS_DEFAULT_PROFILES_FILE, 虽然还是会丢，但是频率会变得更稳定一些。和没有unset FASTRTPS_DEFAULT_PROFILES_FILE对比，系统监控里下载的数据速度也会更平稳，两者都是在5MB/s的范围。和雷达0.5MB一帧，频率10hz一致
-    - 雷达数据要不要走TCP
-1. ✅ 解释一下代码中FASTDDS_BUILTIN_TRANSPORTS是怎么工作的，重点解释LARGE_DATA模式
-    大数据走tcp会更不容易丢数据吗，有什么潜在的风险
+1. ✅如果订阅者采用的是 BEST_EFFORT，发布者采用 BEST_EFFORT 还是 RELIABLE 有区别吗
+1. ✅ 节点订阅数据的完整链路（从网卡接收到应用程序的回调）
+1. ✅ FASTDDS_BUILTIN_TRANSPORTS 有哪些模式，是如何工作的。大数据量传感器话题怎么选择传输模式
 1. ✅ 如果只设置了白名单，没有设置防火墙的话，CPU占用会高很多，这是什么原因
 1. ✅ 配置里useBuiltinTransports为什么要设置成false
 1. ✅ 根据eProsima/Fast-DDS中的代码解释一下sendBufferSize， receiveBufferSize， sendSocketBufferSize，listenSocketBufferSize（一样的效果，但是前一对更新）
@@ -287,258 +278,89 @@ sudo sysctl -w net.core.wmem_max=67108864 # 64MB
 
 # 问题回答
 
-## 问题1：为什么用户电脑需要设置 receiveBufferSize 和 sendBufferSize 之后才能收到点云数据
+## 问题1：如果订阅者采用的是 BEST_EFFORT，发布者采用 BEST_EFFORT 还是 RELIABLE 有区别吗
 
-### 1.1 核心原因：系统默认缓冲区大小不同
+### 1.1 简短回答
 
-**关键发现**：x86 和用户电脑的系统默认 socket 缓冲区大小可能不同，导致行为差异。
+**没有实质区别**。当订阅者使用 `BEST_EFFORT` 时，无论发布者使用 `BEST_EFFORT` 还是 `RELIABLE`，订阅者的接收行为完全相同——都是尽力而为，不会触发重传。
 
-从问题描述中可以看到，所有机器的 `net.core.rmem_max` 都是 212992 字节（208KB）：
+### 1.2 QoS 兼容性规则
 
-```bash
-net.core.rmem_max = 212992      # 208KB
-net.core.wmem_max = 212992      # 208KB
-net.core.rmem_default = 212992  # 208KB
+DDS 规范定义了 QoS 兼容性矩阵：
+
+| 发布者 \ 订阅者 | BEST_EFFORT | RELIABLE |
+|----------------|-------------|----------|
+| BEST_EFFORT    | 兼容 ✅     | 不兼容 ❌ |
+| RELIABLE       | 兼容 ✅     | 兼容 ✅   |
+
+关键规则：
+- 订阅者 `RELIABLE` + 发布者 `BEST_EFFORT` = **不兼容**，无法建立连接
+- 订阅者 `BEST_EFFORT` + 发布者 `RELIABLE` = **兼容**，但订阅者不会请求重传
+- 订阅者 `BEST_EFFORT` + 发布者 `BEST_EFFORT` = **兼容**
+
+### 1.3 为什么没有区别
+
+当订阅者是 `BEST_EFFORT` 时：
+
+```
+发布者 RELIABLE：
+    发送数据 → 订阅者收到 ✅
+    发送数据 → 丢包 → 订阅者不会发 NACK → 不重传 → 丢了就丢了
+
+发布者 BEST_EFFORT：
+    发送数据 → 订阅者收到 ✅
+    发送数据 → 丢包 → 丢了就丢了
 ```
 
-但这并不意味着实际使用的缓冲区大小相同。
+`RELIABLE` 的重传机制需要接收方配合（发送 NACK 请求重传），但 `BEST_EFFORT` 的订阅者不会发送 NACK，所以发布者的 `RELIABLE` 模式形同虚设。
 
-### 1.2 Fast-DDS 缓冲区初始化的两种路径
+### 1.4 底层原理（RTPS 协议）
 
-**路径1：未配置 receiveBufferSize（= 0）**
+在 RTPS 协议层面：
 
-```cpp
-// UDPv4Transport.cpp 构造函数
-mReceiveBufferSize = descriptor.receiveBufferSize;  // = 0
+**发布者 RELIABLE 的行为**：
+- 维护发送历史缓存（Writer History Cache）
+- 等待接收方的 ACKNACK 消息
+- 如果收到 NACK，重传丢失的数据
 
-// UDPTransportInterface.cpp init() 方法
-if (configuration()->receiveBufferSize == 0)
-{
-    // 获取系统当前的 socket 默认缓冲区大小
-    socket_base::receive_buffer_size option;
-    socket.get_option(option);
-    uint32_t system_default = option.value();
-    
-    // 如果系统默认值 < 64KB，强制设置为 64KB
-    if (system_default < 65536)
-    {
-        mReceiveBufferSize = 65536;  // 64KB
-    }
-    else
-    {
-        mReceiveBufferSize = 0;  // 保持为 0，表示使用系统默认值
-    }
-}
+**订阅者 BEST_EFFORT 的行为**：
+- 不发送 ACKNACK 消息
+- 收到数据就处理，丢了就跳过
+- 不维护接收确认状态
 
-// UDPv4Transport.cpp 创建 socket 时
-if (mReceiveBufferSize != 0)
-{
-    socket.set_option(receive_buffer_size(mReceiveBufferSize));
-}
-// 如果 mReceiveBufferSize == 0，不调用 set_option()，使用系统默认值
-```
+所以当两者配合时，发布者虽然维护了历史缓存，但永远收不到 NACK，历史缓存中的数据最终会因为超时或空间不足被清理，白白浪费内存。
 
-**路径2：配置了 receiveBufferSize（= 16MB）**
+### 1.5 发布者用 RELIABLE 的额外开销
 
-```cpp
-// UDPv4Transport.cpp 构造函数
-mReceiveBufferSize = descriptor.receiveBufferSize;  // = 16MB
+虽然对订阅者没有区别，但发布者使用 `RELIABLE` 会有额外开销：
 
-// UDPTransportInterface.cpp init() 方法
-// 因为 receiveBufferSize != 0，跳过自动调整
+| 开销 | BEST_EFFORT 发布者 | RELIABLE 发布者 |
+|------|-------------------|----------------|
+| 历史缓存 | 不维护 | 维护（占用内存） |
+| 心跳消息 | 不发送 | 定期发送 HEARTBEAT |
+| CPU 开销 | 低 | 略高（管理确认状态） |
+| 网络开销 | 只有数据包 | 数据包 + HEARTBEAT |
 
-// UDPv4Transport.cpp 创建 socket 时
-socket.set_option(receive_buffer_size(16777216));  // 请求 16MB
+对于雷达数据（0.5MB/帧，10Hz）：
+- `RELIABLE` 发布者会额外维护历史缓存，默认保留最近几帧
+- 每帧 0.5MB × 历史深度 = 额外内存占用
+- 定期发送 HEARTBEAT 消息（虽然没人回应）
 
-// 系统内核限制
-实际缓冲区 = min(16MB, net.core.rmem_max) = min(16MB, 208KB) = 208KB
-```
+### 1.6 结论和建议
 
-### 1.3 为什么 x86 不需要配置就能接收
+**对于雷达数据场景**：
+- 订阅者已经是 `BEST_EFFORT`（正确选择，实时数据不需要重传）
+- 发布者也应该用 `BEST_EFFORT`，避免不必要的开销
+- 发布者用 `RELIABLE` 不会改善接收质量，只会浪费资源
 
-**假设场景**：
+**什么时候发布者应该用 RELIABLE**：
+- 当存在 `RELIABLE` 的订阅者时（如关键控制指令、配置参数）
+- 需要保证所有订阅者都收到数据的场景
 
-**x86 的情况**：
-```
-系统默认缓冲区（socket 创建时的初始值）= 208KB
-    ↓
-Fast-DDS 检测到 >= 64KB
-    ↓
-mReceiveBufferSize = 0（保持系统默认）
-    ↓
-创建 socket 时不调用 set_option()
-    ↓
-最终缓冲区 = 208KB（系统默认值）
-    ↓
-能缓存 ~138 个 UDP 包（208KB / 1500字节）
-    ↓
-单帧点云需要 354 个包 → 覆盖率 39%
-    ↓
-虽然不完美，但勉强能接收（可能偶尔丢帧）
-```
-
-**用户电脑的情况（未配置）**：
-```
-系统默认缓冲区 = 可能很小（如 8KB 或 16KB）
-    ↓
-Fast-DDS 检测到 < 64KB
-    ↓
-mReceiveBufferSize = 64KB（自动调整）
-    ↓
-创建 socket 时调用 set_option(64KB)
-    ↓
-最终缓冲区 = 64KB
-    ↓
-能缓存 ~43 个 UDP 包
-    ↓
-单帧点云需要 354 个包 → 覆盖率 12%
-    ↓
-严重丢包，无法接收完整帧
-```
-
-**用户电脑的情况（配置 16MB）**：
-```
-配置 receiveBufferSize = 16MB
-    ↓
-Fast-DDS 跳过自动调整
-    ↓
-mReceiveBufferSize = 16MB
-    ↓
-创建 socket 时调用 set_option(16MB)
-    ↓
-系统限制：min(16MB, 208KB) = 208KB
-    ↓
-最终缓冲区 = 208KB
-    ↓
-能缓存 ~138 个 UDP 包
-    ↓
-覆盖率 39%，能接收（虽然仍不完美）
-```
-
-### 1.4 关键点：配置 receiveBufferSize 的真正作用
-
-**配置 receiveBufferSize 不是为了突破系统限制，而是为了触发 set_option() 调用**。
-
-当用户电脑的系统默认缓冲区很小时：
-- 不配置：Fast-DDS 自动调整为 64KB（太小）
-- 配置 16MB：Fast-DDS 调用 set_option(16MB)，系统应用 rmem_max 限制，最终得到 208KB
-
-**为什么这样设计**：
-
-Fast-DDS 的逻辑是：
-1. 如果用户不配置，尝试使用系统默认值
-2. 如果系统默认值太小（< 64KB），强制设置为 64KB
-3. 如果用户配置了，尊重用户的选择，调用 set_option()
-
-这个设计的问题是：
-- 当系统默认值很小时，自动调整只到 64KB（不够）
-- 但如果用户配置了一个大值（如 16MB），即使系统限制为 208KB，也比 64KB 好
-
-### 1.5 点云数据的传输需求
-
-**数据规模**：
-- 单帧大小：0.50 MB (521,664 字节)
-- 发布频率：10Hz
-- QoS：BEST_EFFORT（不保证可靠传输）
-
-**UDP 分片**：
-- 以太网 MTU：1500 字节
-- 单帧需要的 UDP 包数：521,664 / 1500 ≈ **354 个包**
-
-**缓冲区需求分析**：
-
-| 缓冲区大小 | 能缓存的包数 | 单帧覆盖率 | 能否接收 | 说明 |
-|----------|------------|----------|---------|------|
-| 64KB | ~43 个 | 12% | ❌ | 严重丢包 |
-| 208KB | ~138 个 | 39% | ⚠️ | 勉强能用，不稳定 |
-| 1MB | ~682 个 | 193% | ✅ | 能完整缓存单帧 |
-| 16MB | ~10922 个 | 3086% | ✅ | 能缓存多帧 |
-
-**为什么 208KB 能勉强接收**：
-- 虽然只能缓存 39% 的单帧数据
-- 但如果应用程序处理及时，能在新包到达前清空缓冲区
-- x86 专用环境，处理速度快，208KB 够用
-- 用户电脑多任务环境，处理慢，208KB 不够用
-
-### 1.6 网线长度的影响（CAT 6, 1m）
-
-**问题描述中提到**：
-- 用户电脑：CAT 6 网线，1m 长
-- x86：网线可能更短
-
-**网线长度的影响分析**：
-
-1. **传输延迟**：
-   - 光速在铜线中约 2/3c ≈ 200,000 km/s
-   - 1m 网线延迟：1m / 200,000,000 m/s = 5 纳秒
-   - **影响可忽略不计**
-
-2. **信号衰减**：
-   - CAT 6 网线在 100m 内信号衰减很小
-   - 1m 的衰减几乎为零
-   - **不是问题**
-
-3. **电磁干扰**：
-   - 1m 网线如果靠近电源线、显示器等，可能受干扰
-   - 但 CAT 6 有良好的屏蔽
-   - **影响很小**
-
-**结论**：网线长度（1m vs 更短）不是主要原因，主要原因是系统缓冲区配置。
-
-### 1.7 完整解决方案
-
-**方案1：增加系统缓冲区限制（推荐）**
-
-```bash
-# 临时设置（重启后失效）
-sudo sysctl -w net.core.rmem_max=67108864   # 64MB
-sudo sysctl -w net.core.wmem_max=67108864   # 64MB
-sudo sysctl -w net.core.rmem_default=16777216  # 16MB
-
-# 永久设置
-echo "net.core.rmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-echo "net.core.wmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-echo "net.core.rmem_default=16777216" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-```
-
-**方案2：配置 Fast-DDS**
-
-```xml
-<receiveBufferSize>16777216</receiveBufferSize>  <!-- 16MB -->
-<sendBufferSize>16777216</sendBufferSize>        <!-- 16MB -->
-```
-
-**方案3：验证配置是否生效**
-
-```bash
-# 启动 ROS2 节点后，查看实际的 socket 缓冲区大小
-sudo ss -u -a -n -p -m | grep ros
-
-# 输出示例：
-# skmem:(r0,rb16777216,t0,tb16777216,f0,w0,o0,bl0,d0)
-# rb16777216 表示接收缓冲区为 16MB
-```
-
-### 1.8 总结
-
-**为什么用户电脑需要配置 buffer**：
-
-1. **系统默认缓冲区可能很小**（< 64KB）
-2. **Fast-DDS 自动调整只到 64KB**（不够用）
-3. **配置 16MB 后触发 set_option()**，系统应用 rmem_max 限制
-4. **最终得到 208KB**（比 64KB 好 3 倍）
-
-**为什么 x86 不需要配置**：
-
-1. **系统默认缓冲区已经是 208KB**
-2. **Fast-DDS 检测到 >= 64KB**，保持系统默认值
-3. **最终也是 208KB**，够用
-
-**关键发现**：
-- 配置 receiveBufferSize 不是为了突破系统限制
-- 而是为了触发 set_option() 调用，让系统应用 rmem_max 限制
-- 最终缓冲区大小 = min(配置值, net.core.rmem_max)
+**最佳实践**：
+- 传感器数据（雷达、相机）：发布者和订阅者都用 `BEST_EFFORT`
+- 控制指令、状态机：发布者和订阅者都用 `RELIABLE`
+- 混合场景：发布者用 `RELIABLE`（兼容两种订阅者），但要注意额外开销
 
 ---
 
@@ -548,914 +370,318 @@ sudo ss -u -a -n -p -m | grep ros
 
 ```mermaid
 flowchart TD
-    A["Network Card<br/>Receive UDP"]
+    A["物理层<br/>网卡接收以太网帧"]
 
-    B["Layer 1: Kernel Buffer<br/>Socket Receive Buffer<br/><br/>Size: min(receiveBufferSize, rmem_max)<br/>Role: Cache packets from NIC<br/>Full: Kernel drops packets"]
+    B["IP Fragment 重组<br/>内核 ipfrag 缓冲区<br/><br/>大小: ipfrag_high_thresh (默认4MB)<br/>作用: 将IP分片重组为完整UDP包<br/>溢出: 触发全量清理 → 雪崩式丢包"]
 
-    C["Layer 2: App Buffer<br/>ChannelResource<br/><br/>Size: 10500 bytes<br/>Role: Store single UDP packet<br/>Full: Never full"]
+    C["内核 Socket 缓冲区<br/>sk->sk_receive_queue<br/><br/>大小: min(receiveBufferSize, rmem_max)<br/>作用: 缓存完整UDP包等待应用读取<br/>满: 内核丢弃新到达的包"]
 
-    D["Layer 3: Reassembly<br/>Fragment Buffer<br/><br/>Size: Dynamic<br/>Role: Cache incomplete fragments<br/>Full: Drop old messages"]
+    D["应用层接收缓冲区<br/>ChannelResource<br/><br/>大小: 65500 bytes<br/>作用: 存放单个UDP包<br/>满: 不会满(逐包读取)"]
 
-    E["Layer 4: Deserialization<br/>Temp Buffer<br/><br/>Size: Message size<br/>Role: Store serialized data<br/>Full: Never full"]
+    E["RTPS Fragment 重组<br/>StatelessReader<br/><br/>大小: 动态<br/>作用: 将多个RTPS分片拼成完整消息<br/>超时: 丢弃不完整的消息"]
 
-    F["User Callback<br/>Application"]
+    F["反序列化 + 用户回调<br/>ROS2 消息"]
 
-    A -->|DMA| B
-    B -->|recvfrom| C
-    C -->|callback| D
-    D -->|complete msg| E
-    E -->|ROS msg| F
+    A -->|"DMA + 内核网络栈"| B
+    B -->|"完整UDP包"| C
+    C -->|"recvfrom()"| D
+    D -->|"RTPS解析"| E
+    E -->|"完整消息"| F
 
     style A fill:#e1f5ff,stroke:#01579b,stroke-width:2px
-    style B fill:#ffebee,stroke:#c62828,stroke-width:3px
-    style C fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    style D fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style E fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    style F fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    style B fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px
+    style C fill:#ffebee,stroke:#c62828,stroke-width:3px
+    style D fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style E fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style F fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
 ```
 
-**关键点**：
-- 红色标注的"内核 Socket 缓冲区"是最关键的缓存层
-- 这一层满了会导致内核级丢包，无法恢复
-- 其他层的缓存主要起辅助作用
+红色标注的两层是最容易出问题的瓶颈：
+- **IP Fragment 重组**：雷达数据的主要丢包根因（见问题8）
+- **内核 Socket 缓冲区**：次要瓶颈，缓冲区太小时也会丢包
 
-### 2.2 第1层缓存：内核 Socket 缓冲区（最关键）
+### 2.2 数据分片的两个层次
 
-#### 2.2.1 是什么
-
-```
-网卡接收到 UDP 包
-    ↓ DMA 传输
-内核网络栈处理（解析 IP、UDP 头部）
-    ↓ 根据端口找到 socket
-内核 Socket 缓冲区（sk->sk_receive_queue）
-    ↓ 等待应用程序读取
-```
-
-**管理者**：Linux 内核  
-**大小**：`min(receiveBufferSize, net.core.rmem_max)`  
-**当前配置**：208KB 或 64MB（取决于系统设置）
-
-#### 2.2.2 缓存的作用
-
-**作用1：平滑网络和应用程序的速度差异**
+理解链路之前，先搞清楚雷达数据经历了两次分片：
 
 ```
-网卡接收速度：125 MB/s（千兆网卡）
-应用程序处理速度：取决于 CPU 负载
-
-如果没有缓冲区：
-    网卡接收 → 应用程序必须立即处理 → 处理不过来 → 丢包
-
-有了缓冲区：
-    网卡接收 → 暂存在缓冲区 → 应用程序按自己的节奏读取
+一帧雷达点云 0.5MB
+    │
+    │ RTPS 分片（Fast-DDS 做的，应用层）
+    ▼
+┌──────┐ ┌──────┐ ┌──────┐ ... ┌──────┐
+│frag1 │ │frag2 │ │frag3 │     │frag8 │  ← 8个 RTPS fragment，每个~65KB
+│ 65KB │ │ 65KB │ │ 65KB │     │ 残余 │    每个作为一个独立 UDP 包发送
+└──┬───┘ └──────┘ └──────┘     └──────┘
+   │
+   │ IP 分片（Linux 内核做的，网络层）
+   ▼
+┌────┐┌────┐┌────┐...┌────┐
+│1500││1500││1500│   │1500│  ← 每个65KB UDP包被切成~45个 IP fragment
+└────┘└────┘└────┘   └────┘
 ```
 
-**作用2：应对突发流量**
+所以一帧雷达数据 = 8个 RTPS fragment = 8×45 = **360个 IP fragment**。10Hz 发送 = **3600 IP fragments/sec**。
+
+
+### 2.3 第1层：IP Fragment 重组（最关键的瓶颈）
+
+#### 是什么
+
+网卡收到的是 1500 字节的以太网帧（IP fragment），内核需要把属于同一个 UDP 包的 ~45 个 IP fragment 重新拼成一个完整的 65KB UDP 包。
 
 ```
-正常情况：
-    数据包均匀到达，应用程序及时处理，缓冲区使用率低
-
-突发情况（CPU 短暂繁忙）：
-    数据包继续到达 → 暂存在缓冲区 → CPU 恢复后快速处理
-    
-如果缓冲区足够大：
-    能够缓存突发期间的所有数据包，不丢包
-```
-
-**作用3：缓存 UDP 分片**
-
-```
-单帧点云：0.5MB = 354 个 UDP 包
-到达时间：约 35ms（假设 10 包/ms）
-
-如果缓冲区太小（64KB）：
-    只能缓存 ~43 个包
-    第 44 个包到达时，缓冲区满 → 丢包
-    
-如果缓冲区足够大（1MB）：
-    能缓存 ~682 个包
-    足够容纳单帧的 354 个包 → 不丢包
-```
-
-#### 2.2.3 满了会怎样
-
-**内核级丢包（无法恢复）**：
-
-```c
-// Linux 内核源码（简化）
-int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
-{
-    // 检查缓冲区是否有空间
-    if (sk_rmem_alloc_get(sk) + skb->truesize > sk->sk_rcvbuf)
-    {
-        // 缓冲区满了，丢弃数据包
-        atomic_inc(&sk->sk_drops);
-        kfree_skb(skb);  // 释放数据包内存
-        return -ENOMEM;
-    }
-    
-    // 将数据包加入接收队列
-    __skb_queue_tail(&sk->sk_receive_queue, skb);
-    sk->sk_data_ready(sk);  // 唤醒应用程序
-    
-    return 0;
-}
-```
-
-**后果**：
-
-```
-UDP 包被丢弃
+网卡收到 IP fragment
     ↓
-应用程序永远收不到这个包
+内核根据 (src_ip, dst_ip, protocol, identification) 四元组
+找到对应的重组队列
     ↓
-如果是点云的某个分片
+将 fragment 放入队列
     ↓
-整个点云帧无法重组
-    ↓
-用户回调函数不会被调用
+收齐所有 fragment → 重组成完整 UDP 包 → 送入 Socket 缓冲区
 ```
 
-**监控方法**：
+#### 为什么是最关键的瓶颈
+
+内核的 IP fragment 重组缓冲区有大小限制：
+
+| 参数 | 默认值 | 作用 |
+|------|--------|------|
+| `ipfrag_high_thresh` | 4MB | 缓冲区上限，超过触发全量清理 |
+| `ipfrag_low_thresh` | 3MB | 清理目标，清理到此值以下 |
+| `ipfrag_time` | 30s | fragment 超时时间 |
+
+雷达数据的流量：
+- 10Hz × 8个UDP包 × 65KB = **5.2MB/s** 的 fragment 流量
+- 默认缓冲区只有 4MB，**不到1秒就会溢出**
+
+#### 溢出时的雪崩效应
+
+```
+正常阶段（前30秒左右）：
+    fragment 到达 → 重组成功 → 送入 Socket → 缓冲区使用量 < 4MB
+    ReasmOK = 60-84/s ✅
+
+溢出触发：
+    缓冲区使用量 > ipfrag_high_thresh (4MB)
+    ↓
+    内核触发全量清理：丢弃所有不完整的重组队列
+    ↓
+    ReasmOK = 0, ReasmFail = 3500/s ❌
+    ↓
+    新到达的 fragment 也被立即清理（因为缓冲区刚清空又马上被填满）
+    ↓
+    持续 10-15 秒的完全丢包
+
+恢复阶段：
+    清理释放了空间 → 新 fragment 可以暂时存活 → 部分重组成功
+    ↓
+    但很快又溢出 → 再次雪崩
+    ↓
+    形成周期性的 "正常→雪崩→恢复→雪崩" 循环
+```
+
+#### 关键特性：丢1个 fragment = 丢整个 UDP 包
+
+IP 分片有一个致命特点：45 个 IP fragment 中只要丢 1 个，整个 65KB 的 UDP 包就无法重组，全部作废。不是丢了 1/45 的数据，而是丢了 45/45。
+
+#### 监控方法
 
 ```bash
-# 查看内核级丢包统计
-netstat -su | grep -i "receive buffer errors"
+# 查看 IP 重组统计
+cat /proc/net/snmp | grep -A1 "^Ip:"
 
-# 输出示例：
-#     6789 receive buffer errors full  ← 这个数字在增加说明缓冲区满了
-
-# 实时监控
-watch -n 1 'netstat -su | grep -i "receive buffer errors"'
+# 关键指标：
+# ReasmReqds - 收到的需要重组的 fragment 数
+# ReasmOKs   - 重组成功的 UDP 包数
+# ReasmFails - 重组失败的 UDP 包数
 ```
 
-#### 2.2.4 为什么这层最关键
-
-| 对比项 | 内核缓冲区 | 其他层缓存 |
-|--------|----------|----------|
-| 丢包后果 | 永久丢失，无法恢复 | 可能有补救措施 |
-| 影响范围 | 影响所有后续处理 | 只影响局部 |
-| 优化难度 | 需要系统权限（root） | 应用层可配置 |
-| 重要性 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-
-**关键结论**：
-- 内核缓冲区是整个链路的瓶颈
-- 一旦在这里丢包，后续所有优化都无济于事
-- 必须确保这层缓冲区足够大
-
-### 2.3 第2层缓存：应用层接收缓冲区（辅助）
-
-#### 2.3.1 是什么
-
-```cpp
-// Fast-DDS 接收线程
-void UDPChannelResource::perform_listen_operation()
-{
-    // 创建接收缓冲区
-    std::vector<octet> reception_buffer(maxMessageSize);  // 10500 字节
-    
-    while (is_listening_)
-    {
-        // 从内核缓冲区读取一个 UDP 包
-        size_t bytes_received = socket_.receive_from(
-            asio::buffer(reception_buffer),
-            sender_endpoint_
-        );
-        
-        // 传递给下一层处理
-        on_data_received_callback_(reception_buffer.data(), bytes_received);
-    }
-}
-```
-
-**管理者**：Fast-DDS 接收线程  
-**大小**：maxMessageSize（默认 10500 字节）  
-**作用**：临时存储单个 UDP 包
-
-#### 2.3.2 缓存的作用
-
-**作用：临时存储单个 UDP 包**
-
-```
-recvfrom() 系统调用
-    ↓ 从内核缓冲区复制数据
-reception_buffer（10500 字节）
-    ↓ 临时存储
-传递给消息处理回调
-    ↓ 立即处理，不保留
-缓冲区可以复用（接收下一个包）
-```
-
-**为什么不会满**：
-- 每次只接收一个 UDP 包（最大 1500 字节）
-- 10500 字节足够容纳一个 UDP 包
-- 处理完立即复用，不会积压
-
-#### 2.3.3 优化空间
-
-**通常不需要优化**：
-- 大小已经足够（10500 字节 >> 1500 字节）
-- 不是瓶颈
-
-**如果要优化**：
-```xml
-<maxMessageSize>65536</maxMessageSize>  <!-- 增加到 64KB -->
-```
-
-但意义不大，因为：
-- UDP 包最大 1500 字节（受 MTU 限制）
-- 增加缓冲区不会提高性能
-
-### 2.4 第3层缓存：分片重组缓冲区（重要）
-
-#### 2.4.1 是什么
-
-```cpp
-// Fast-DDS 分片重组
-class FragmentedChangePitStop
-{
-    std::map<uint32_t, FragmentData> fragments_;  // 存储已接收的分片
-    uint32_t total_fragments_;  // 总分片数
-    uint32_t received_fragments_;  // 已接收分片数
-    
-    bool is_fully_assembled()
-    {
-        return received_fragments_ == total_fragments_;
-    }
-    
-    CacheChange_t* assemble_complete_change()
-    {
-        // 将所有分片重组为完整消息
-        // ...
-    }
-};
-```
-
-**管理者**：Fast-DDS MessageReceiver  
-**大小**：动态分配，取决于未完成的消息数量  
-**作用**：缓存部分接收的分片，等待所有分片到达
-
-#### 2.4.2 缓存的作用
-
-**作用：重组 UDP 分片**
-
-```
-单帧点云：0.5MB = 354 个 UDP 包
-
-接收过程：
-    收到第 1 个分片 → 创建 FragmentedChangePitStop，存储分片 1
-    收到第 2 个分片 → 存储分片 2
-    ...
-    收到第 354 个分片 → 所有分片齐全
-    ↓
-    重组为完整的 0.5MB 消息
-    ↓
-    传递给反序列化层
-    ↓
-    删除 FragmentedChangePitStop，释放内存
-```
-
-**为什么需要这层缓存**：
-- UDP 包可能乱序到达（分片 2 可能先于分片 1 到达）
-- 需要缓存已到达的分片，等待缺失的分片
-- 所有分片到达后才能重组
-
-#### 2.4.3 满了会怎样
-
-**丢弃旧的未完成消息**：
-
-```cpp
-// 如果未完成的消息太多，丢弃最旧的
-if (fragmented_changes_.size() > max_fragmented_changes_)
-{
-    auto oldest = fragmented_changes_.begin();
-    delete oldest->second;  // 删除最旧的未完成消息
-    fragmented_changes_.erase(oldest);
-}
-```
-
-**后果**：
-- 被丢弃的消息永远无法重组
-- 用户回调函数不会被调用
-
-**为什么会满**：
-- 如果内核缓冲区太小，很多消息只收到部分分片
-- 大量未完成的消息积压
-- 占用内存过多
-
-**解决方法**：
-- 增加内核缓冲区，减少分片丢失
-- 减少未完成消息的积压
-
-### 2.5 第4层：反序列化临时缓冲区（临时）
-
-#### 2.5.1 是什么
-
-```cpp
-// CDR 反序列化
-bool PointCloud2PubSubType::deserialize(
-    SerializedPayload_t* payload,  // 输入：序列化数据（0.5MB）
-    void* data)  // 输出：ROS 消息对象
-{
-    // 创建 CDR 解码器
-    eprosima::fastcdr::Cdr deser(payload->data, payload->length);
-    
-    // 反序列化为 ROS 消息
-    sensor_msgs::msg::PointCloud2* msg = 
-        static_cast<sensor_msgs::msg::PointCloud2*>(data);
-    
-    deser >> msg->header;
-    deser >> msg->data;  // 0.5MB 的点云数据
-    
-    return true;
-}
-```
-
-**管理者**：Fast-DDS TypeSupport  
-**大小**：等于消息大小（0.5MB）  
-**作用**：临时存储待解析的序列化数据
-
-#### 2.5.2 缓存的作用
-
-**作用：临时存储，进行反序列化**
-
-```
-输入：SerializedPayload（0.5MB 二进制数据）
-    ↓ CDR 解码
-输出：PointCloud2 对象（0.5MB 结构化数据）
-    ↓ 传递给用户回调
-处理完毕，释放临时缓冲区
-```
-
-**为什么不会满**：
-- 处理完立即释放
-- 不会积压
-
-#### 2.5.3 优化：零拷贝
-
-**传统方式（有拷贝）**：
-
-```
-序列化数据（0.5MB）
-    ↓ 内存拷贝
-ROS 消息对象（0.5MB）
-    ↓ 传递给用户
-用户处理
-```
-
-**零拷贝方式（Loan API）**：
-
-```
-序列化数据（0.5MB）
-    ↓ 直接传递指针（无拷贝）
-用户处理
-    ↓ 处理完归还
-释放内存
-```
-
-**配置方法**：
-
-```cpp
-// 发布者端
-auto loaned_msg = publisher->borrow_loaned_message();
-// 填充数据
-publisher->publish(std::move(loaned_msg));
-
-// 订阅者端
-subscription->take_loaned_message(
-    [](const sensor_msgs::msg::PointCloud2& msg) {
-        // 处理消息（无拷贝）
-    }
-);
-```
-
-**优点**：
-- 减少内存拷贝（0.5MB → 0）
-- 降低 CPU 负载
-- 提高性能
-
-### 2.6 各层缓存的对比总结
-
-| 层级 | 缓存名称 | 大小 | 作用 | 满了的后果 | 重要性 | 优化方法 |
-|------|---------|------|------|----------|--------|---------|
-| 第1层 | 内核 Socket 缓冲区 | 208KB-64MB | 缓存网卡接收的数据包 | 内核丢包，永久丢失 | ⭐⭐⭐⭐⭐ | 增加 rmem_max |
-| 第2层 | 应用层接收缓冲区 | 10500 字节 | 临时存储单个 UDP 包 | 不会满 | ⭐⭐ | 通常不需要 |
-| 第3层 | 分片重组缓冲区 | 动态分配 | 缓存未完成的分片 | 丢弃旧消息 | ⭐⭐⭐⭐ | 增加内核缓冲区 |
-| 第4层 | 反序列化缓冲区 | 等于消息大小 | 临时存储待解析数据 | 不会满 | ⭐⭐ | 使用零拷贝 |
-
-### 2.7 完整数据流示例：接收一帧点云
-
-**时间线分析**：
-
-```
-T0: Orin 发布点云（0.5MB，354 个 UDP 包）
-    ↓
-T0 + 0.1ms: 第 1 个 UDP 包到达用户电脑网卡
-    ↓ DMA 传输
-T0 + 0.11ms: 第 1 个 UDP 包进入内核缓冲区（占用 1500 字节）
-    ↓
-T0 + 0.2ms: 第 2 个 UDP 包到达
-    ↓
-... (354 个 UDP 包陆续到达)
-    ↓
-T0 + 35ms: 第 354 个 UDP 包到达
-    ↓ 内核缓冲区使用量：354 × 1500 = 531KB
-    
-期间：Fast-DDS 接收线程不断调用 recvfrom()
-    ↓ 每次读取一个 UDP 包（1500 字节）
-    ↓ 传递给分片重组层
-    ↓ 内核缓冲区逐渐清空
-    
-T0 + 36ms: Fast-DDS 收到所有 354 个分片
-    ↓ 分片重组（1ms）
-T0 + 37ms: 重组为完整的 0.5MB 消息
-    ↓ CDR 反序列化（1ms）
-T0 + 38ms: 反序列化为 PointCloud2 对象
-    ↓ 调用用户回调（2ms）
-T0 + 40ms: 用户回调函数开始处理
-
-总延迟：~40ms
-```
-
-**如果内核缓冲区太小（64KB）**：
-
-```
-T0: 第 1 个 UDP 包到达，进入内核缓冲区
-    ↓
-T0 + 5ms: 内核缓冲区满了（64KB / 1500字节 ≈ 43 个包）
-    ↓
-T0 + 5.1ms: 第 44 个 UDP 包到达
-    ↓ 内核缓冲区满，丢弃 ❌
-    ↓
-T0 + 35ms: 第 354 个 UDP 包到达
-    ↓
-Fast-DDS 只收到 43 个分片（缺失 311 个分片）
-    ↓
-分片重组失败，整个消息丢弃 ❌
-    ↓
-用户回调函数不会被调用
-```
-
-**关键点**：
-- 内核缓冲区必须能容纳至少一帧的所有 UDP 包（531KB）
-- 如果缓冲区太小，会在接收过程中丢包
-- 一旦丢包，整个帧无法重组
-
-### 2.8 优化建议
-
-**优先级1：增加内核缓冲区（最重要）**
+#### 解决方案
 
 ```bash
-# 增加到 64MB
-sudo sysctl -w net.core.rmem_max=67108864
-sudo sysctl -w net.core.wmem_max=67108864
-
-# 配置 Fast-DDS
-<receiveBufferSize>67108864</receiveBufferSize>
+sudo sysctl -w net.ipv4.ipfrag_high_thresh=67108864  # 64MB
+sudo sysctl -w net.ipv4.ipfrag_low_thresh=50331648   # 48MB
+sudo sysctl -w net.ipv4.ipfrag_time=5                 # 5秒超时
 ```
 
-**为什么最重要**：
-- 内核缓冲区是瓶颈
-- 一旦在这里丢包，无法恢复
-- 其他优化都建立在这个基础上
+### 2.4 第2层：内核 Socket 缓冲区
 
-**优先级2：减少处理延迟**
+#### 是什么
+
+IP fragment 重组成功后，完整的 UDP 包被放入对应 socket 的接收队列（`sk->sk_receive_queue`），等待应用程序调用 `recvfrom()` 读取。
+
+```
+完整 UDP 包（65KB）
+    ↓
+内核根据目标端口找到 socket
+    ↓
+放入 socket 接收队列
+    ↓
+等待 Fast-DDS 调用 recvfrom() 读取
+```
+
+#### 缓冲区大小
+
+大小由两个因素决定：
+- Fast-DDS 配置的 `receiveBufferSize`
+- 系统限制 `net.core.rmem_max`
+- 最终大小 = `min(receiveBufferSize, rmem_max)`
+
+| 配置情况 | 最终缓冲区 | 能缓存的65KB包数 |
+|----------|-----------|----------------|
+| 未配置，系统默认小 | 64KB | ~1个 |
+| 未配置，系统默认208KB | 208KB | ~3个 |
+| 配置16MB，rmem_max=208KB | 208KB | ~3个 |
+| 配置16MB，rmem_max=64MB | 16MB | ~250个 |
+
+#### 满了会怎样
 
 ```bash
-# 设置 CPU 性能模式
-sudo cpupower frequency-set -g performance
-
-# 提高进程优先级
-sudo renice -n -10 -p $(pgrep -f "ros2")
-
-# 关闭不必要的应用程序
+# 监控 socket 缓冲区丢包
+watch -n 1 'netstat -su | grep "receive buffer errors"'
 ```
 
-**为什么重要**：
-- 及时清空内核缓冲区
-- 减少缓冲区积压
-- 降低丢包风险
+如果 `receive buffer errors` 在增长，说明 socket 缓冲区满了，内核在丢弃新到达的 UDP 包。
 
-**优先级3：使用零拷贝（可选）**
+#### 解决方案
+
+```bash
+# 增大系统限制
+sudo sysctl -w net.core.rmem_max=67108864    # 64MB
+sudo sysctl -w net.core.rmem_default=16777216 # 16MB
+```
+
+### 2.5 第3层：应用层接收缓冲区
+
+#### 是什么
+
+Fast-DDS 的 `UDPChannelResource` 从 socket 中读取数据的临时缓冲区。
 
 ```cpp
-// 使用 Loan API
-auto loaned_msg = publisher->borrow_loaned_message();
-publisher->publish(std::move(loaned_msg));
+// 每次 recvfrom() 读取一个 UDP 包
+CDRMessage_t msg;
+msg.buffer = new octet[65500];  // s_maximumMessageSize
+int bytes = recvfrom(socket, msg.buffer, 65500, ...);
 ```
 
-**为什么可选**：
-- 减少内存拷贝
-- 降低 CPU 负载
-- 但不是瓶颈
+#### 特点
 
-### 2.9 总结
+- 大小固定：65500 字节（`s_maximumMessageSize`）
+- 逐包读取：每次只读一个 UDP 包
+- 不会成为瓶颈：读完立即处理，不会积压
 
-**完整链路**：
+### 2.6 第4层：RTPS Fragment 重组
+
+#### 是什么
+
+一帧雷达数据被 RTPS 层分成了 8 个 fragment（每个~65KB），接收端的 `StatelessReader`（BEST_EFFORT 模式）需要收齐所有 8 个 fragment 才能拼成完整消息。
 
 ```
-网卡 → 内核缓冲区 → 应用层缓冲区 → 分片重组 → 反序列化 → 用户回调
-       ↑ 最关键      ↑ 辅助         ↑ 重要      ↑ 临时
+收到 RTPS fragment 1/8 → 缓存
+收到 RTPS fragment 2/8 → 缓存
+...
+收到 RTPS fragment 8/8 → 拼成完整消息 → 反序列化 → 回调用户
 ```
 
-**缓存的作用**：
+#### 丢失处理
 
-1. **内核缓冲区**：平滑速度差异，应对突发流量，缓存 UDP 分片
-2. **应用层缓冲区**：临时存储单个 UDP 包
-3. **分片重组缓冲区**：缓存未完成的分片，等待重组
-4. **反序列化缓冲区**：临时存储待解析数据
+- BEST_EFFORT 模式：不请求重传，丢了就丢了
+- 如果 8 个 fragment 中任何一个丢失，整帧数据作废
+- 新的一帧到达时，旧的不完整帧被丢弃
 
-**优化重点**：
+### 2.7 第5层：反序列化 + 用户回调
 
-1. **增加内核缓冲区**：最重要，必须优先优化
-2. **减少处理延迟**：及时清空缓冲区
-3. **使用零拷贝**：可选，锦上添花
+完整的 RTPS 消息经过 CDR 反序列化，转换为 ROS2 消息类型（如 `sensor_msgs::msg::PointCloud2`），然后调用用户注册的回调函数。
 
-**关键结论**：
+这一层不会丢包，只要前面的层都正常，数据就能到达用户。
 
-- 内核缓冲区是整个链路的瓶颈
-- 必须确保内核缓冲区足够大（至少 1MB，推荐 64MB）
-- 其他层的优化都建立在这个基础上
+### 2.8 各层对比总结
+
+| 层次 | 执行者 | 丢包可能性 | 监控方法 |
+|------|--------|-----------|---------|
+| IP Fragment 重组 | Linux 内核 | **最高**（默认4MB缓冲区） | `cat /proc/net/snmp \| grep Ip` 看 ReasmFails |
+| Socket 缓冲区 | Linux 内核 | 中等（取决于配置） | `netstat -su` 看 receive buffer errors |
+| 应用层接收 | Fast-DDS | 极低 | - |
+| RTPS 重组 | Fast-DDS | 低（取决于前面层的丢包） | ROS2 QoS 丢包回调 |
+| 反序列化 | Fast-DDS | 无 | - |
+
+### 2.9 完整数据流示例：接收一帧雷达点云
+
+```
+Orin 发送一帧点云 (0.5MB)
+    │
+    │ Fast-DDS RTPS 分片
+    ▼
+8 个 RTPS fragment (每个~65KB)
+    │
+    │ 每个 fragment 作为一个 UDP 包发送
+    │ Linux 内核 IP 分片
+    ▼
+8 × 45 = 360 个 IP fragment (每个~1500字节)
+    │
+    │ 通过网线传输
+    ▼
+用户电脑网卡接收 360 个以太网帧
+    │
+    │ 内核 IP fragment 重组 ← ★ 瓶颈1：ipfrag 缓冲区
+    ▼
+8 个完整 UDP 包 (每个~65KB)
+    │
+    │ 放入 socket 接收队列 ← ★ 瓶颈2：socket 缓冲区
+    ▼
+Fast-DDS recvfrom() 逐个读取
+    │
+    │ RTPS fragment 重组
+    ▼
+1 个完整 ROS2 消息 (0.5MB)
+    │
+    │ CDR 反序列化
+    ▼
+用户回调函数收到 PointCloud2 消息
+```
+
+### 2.10 优化建议
+
+按优先级排序：
+
+1. **增大 IP fragment 重组缓冲区**（最重要）
+   ```bash
+   sudo sysctl -w net.ipv4.ipfrag_high_thresh=67108864
+   sudo sysctl -w net.ipv4.ipfrag_time=5
+   ```
+
+2. **增大 socket 缓冲区**
+   ```bash
+   sudo sysctl -w net.core.rmem_max=67108864
+   ```
+
+3. **使用 interfaceWhiteList 限制网络接口**
+   - 避免 WiFi 多播干扰有线网通讯
+
+4. **启用共享内存（SHM）传输**
+   - 同一台机器上的 ROS 节点间通讯走 SHM，减轻 UDP 网络负担
+
 
 ---
 
-## 问题3：用户电脑上收到雷达数据频率不稳定
+## 问题3：FASTDDS_BUILTIN_TRANSPORTS 有哪些模式，是如何工作的
 
-### 3.1 问题现象分析
+### 3.1 问题背景
 
-**观察到的现象**：
-- x86：稳定的 10Hz
-- 用户电脑：波动大，一会儿 8Hz，一会儿 0.5Hz
-- 丢包日志显示：连续丢失多帧（如 total count change: 112）
+雷达（激光雷达）数据特征：
+- 单帧大小：~0.5MB
+- 发送频率：10Hz
+- 带宽需求：~5MB/s
+- 实时性要求：高（用于避障、建图等）
 
-**丢包模式分析**：
+FastDDS 支持两种传输协议：
+- **UDPv4**（默认）：无连接，不保证可靠交付
+- **TCPv4**：面向连接，保证可靠交付
 
-```bash
-# 从日志中可以看到
-sec: 1770704090, nanosec: 200066810  # 正常接收
-A message was lost!!! total count change:1  # 丢失 1 帧
-sec: 1770704090, nanosec: 400226810  # 正常接收
-...
-A message was lost!!! total count change:112  # 连续丢失 112 帧
-```
+那么雷达数据是否应该从 UDP 切换到 TCP？
 
-**丢包特征**：
-1. **间歇性丢包**：有时正常，有时大量丢包
-2. **连续丢包**：一旦开始丢包，会连续丢失多帧
-3. **频率波动**：从 10Hz 降到 0.5Hz，说明 95% 的帧丢失
-
-### 3.2 为什么 x86 稳定
-
-**x86 的优势**：
-
-#### 优势1：专用环境
-
-```
-x86 的运行环境：
-- 专用于机器人任务
-- 运行固定的 ROS 节点
-- CPU 负载稳定（< 50%）
-- 内存充足，无交换分区活动
-- 无其他应用程序干扰
-```
-
-**处理循环**：
-
-```
-UDP 包到达 → 进入内核缓冲区 → 应用程序快速读取 → 缓冲区清空
-    ↓                                    ↑
-    └────────────────────────────────────┘
-    循环稳定，缓冲区不会积压
-```
-
-#### 优势2：网络配置
-
-```
-x86 的网络配置：
-- 只有一个网络接口（192.168.0.10）
-- 短距离有线连接（< 1米）
-- 专用网线，无干扰
-- 无路由冲突
-```
-
-#### 优势3：系统优化
-
-```
-x86 可能已经优化过：
-- net.core.rmem_max 可能已经增加
-- CPU 性能模式（不省电）
-- 网络接口优化
-- 进程优先级设置
-```
-
-### 3.3 为什么用户电脑不稳定
-
-**用户电脑的劣势**：
-
-#### 劣势1：多任务环境
-
-```
-用户电脑的运行环境：
-- 同时运行多个应用程序
-  - IDE（VSCode, PyCharm）
-  - 浏览器（Chrome, Firefox）
-  - RViz（3D 可视化，GPU 密集）
-  - 其他开发工具
-- CPU 负载波动大（可能 > 80%）
-- 内存可能紧张，有交换分区活动
-- 频繁的上下文切换
-```
-
-**处理循环（不稳定）**：
-
-```
-UDP 包到达 → 进入内核缓冲区 → 应用程序处理慢（CPU 繁忙）
-    ↓                                    ↑
-    新包到达 → 缓冲区积压 → 缓冲区满 → 丢包 ❌
-```
-
-**CPU 负载波动的影响**：
-
-| 时刻 | CPU 负载 | 处理速度 | 缓冲区状态 | 接收频率 |
-|------|---------|---------|----------|---------|
-| T0 | 30% | 快 | 正常 | 10Hz ✅ |
-| T1 | 85% | 慢 | 积压 | 8Hz ⚠️ |
-| T2 | 95% | 很慢 | 满 | 0.5Hz ❌ |
-| T3 | 40% | 恢复 | 清空 | 10Hz ✅ |
-
-**导致 CPU 负载突然升高的原因**：
-- 浏览器加载页面（JavaScript 执行）
-- 编译代码（gcc, clang）
-- RViz 渲染（GPU 计算）
-- 系统更新（后台下载）
-- 垃圾回收（GC 暂停）
-
-#### 劣势2：网络接口复杂
-
-```
-用户电脑可能有多个网络接口：
-- 有线网卡（enp4s0: 192.168.0.100）
-- WiFi（wlan0: 可能连接公司网络）
-- 虚拟网卡（docker0, veth*）
-- 本地回环（lo: 127.0.0.1）
-```
-
-**路由冲突**：
-
-```bash
-# 查看路由表
-ip route show
-
-# 可能的输出：
-default via 192.168.1.1 dev wlan0  # WiFi 默认路由
-192.168.0.0/24 dev enp4s0  # 有线网络
-172.17.0.0/16 dev docker0  # Docker 网络
-```
-
-**问题**：
-- 如果同时连接了 WiFi 和有线网，可能有路由冲突
-- 内核需要在多个接口间路由数据包
-- 增加网络处理负担
-
-#### 劣势3：缓冲区配置
-
-```
-用户电脑（未优化）：
-net.core.rmem_max = 212992  # 208KB（太小）
-
-x86（可能已优化）：
-net.core.rmem_max = 可能更大（如 8MB）
-```
-
-**即使都是 208KB，处理速度不同**：
-- x86 能快速清空缓冲区，208KB 够用
-- 用户电脑处理慢，208KB 不够用
-
-### 3.4 unset FASTRTPS_DEFAULT_PROFILES_FILE 后为什么更稳定
-
-**配置文件的内容**：
-
-```xml
-<interfaceWhiteList>
-    <address>192.168.0.100</address>
-    <address>127.0.0.1</address>
-</interfaceWhiteList>
-<sendBufferSize>16777216</sendBufferSize>
-<receiveBufferSize>16777216</receiveBufferSize>
-<useBuiltinTransports>false</useBuiltinTransports>
-```
-
-**unset 后的行为**：
-
-```bash
-unset FASTRTPS_DEFAULT_PROFILES_FILE
-```
-
-Fast-DDS 使用默认配置：
-- 不限制网络接口
-- 使用系统默认缓冲区
-- **启用内置传输（UDPv4 + SHM）**
-
-#### 原因1：共享内存传输（SHM）的启用
-
-**配置文件禁用了内置传输**：
-
-```xml
-<useBuiltinTransports>false</useBuiltinTransports>
-```
-
-这会禁用 Fast-DDS 的共享内存传输（SHM），强制所有通信都走 UDP。
-
-**unset 后启用共享内存**：
-
-```
-Fast-DDS 默认传输：
-- UDPv4：用于跨机器通信
-- SHM：用于同一台机器的进程间通信
-```
-
-**传输选择策略**：
-
-```
-同一台机器的进程间通信：
-    ↓
-优先使用共享内存（SHM）
-    ↓ 如果 SHM 不可用
-使用 UDP（回退）
-
-不同机器的通信：
-    ↓
-使用 UDP
-```
-
-**共享内存的优势**：
-
-| 特性 | UDP | 共享内存（SHM） |
-|------|-----|----------------|
-| 延迟 | ~0.1ms | ~0.01ms（快 10 倍） |
-| 带宽 | 受网卡限制 | 受内存带宽限制（更高） |
-| 可靠性 | 不可靠（可能丢包） | 可靠（不丢包） |
-| CPU 开销 | 高（网络栈处理） | 低（直接内存访问） |
-
-**为什么能改善频率稳定性**：
-
-```
-配置文件（禁用 SHM）：
-    所有通信都走 UDP
-    ↓
-    用户电脑上的多个 ROS 节点（如 RViz、rqt）之间也走 UDP
-    ↓
-    增加网络负担
-    ↓
-    更容易丢包
-
-unset（启用 SHM）：
-    本地通信走共享内存
-    ↓
-    减少 UDP 流量
-    ↓
-    网络负担减轻
-    ↓
-    频率更稳定
-```
-
-**具体例子**：
-
-假设用户电脑上运行：
-- ROS 节点 A：订阅雷达数据
-- RViz：订阅雷达数据（用于可视化）
-- rqt：订阅雷达数据（用于监控）
-
-```
-配置文件（禁用 SHM）：
-    Orin → UDP → 用户电脑网卡 → UDP → 节点 A
-                                  ↓ UDP
-                                  RViz
-                                  ↓ UDP
-                                  rqt
-    
-    网络流量 = 1 × 5MB/s（从 Orin）+ 2 × 5MB/s（本地转发）= 15MB/s
-
-unset（启用 SHM）：
-    Orin → UDP → 用户电脑网卡 → 节点 A
-                                  ↓ SHM（共享内存）
-                                  RViz
-                                  ↓ SHM（共享内存）
-                                  rqt
-    
-    网络流量 = 1 × 5MB/s（从 Orin）= 5MB/s
-```
-
-#### 原因2：interfaceWhiteList 的副作用
-
-**配置文件限制了接口**：
-
-```xml
-<interfaceWhiteList>
-    <address>192.168.0.100</address>
-    <address>127.0.0.1</address>
-</interfaceWhiteList>
-```
-
-**问题**：
-- `127.0.0.1` 是本地回环地址
-- 但配置了 `useBuiltinTransports=false`，禁用了共享内存
-- 导致本地通信也走 UDP，效率低下
-
-**unset 后**：
-- 不限制接口，Fast-DDS 自动选择最优路径
-- 本地通信走共享内存，远程通信走 UDP
-- 网络负担减轻
-
-#### 原因3：缓冲区设置的匹配
-
-**配置文件请求 16MB 缓冲区**：
-
-```xml
-<receiveBufferSize>16777216</receiveBufferSize>
-```
-
-但系统限制为 208KB（`net.core.rmem_max = 212992`）。
-
-**可能的问题**：
-- Fast-DDS 请求 16MB，但系统只给 208KB
-- Fast-DDS 内部的缓冲区管理策略可能不匹配
-- 例如，Fast-DDS 可能认为缓冲区很大，采用更激进的发送策略
-
-**unset 后**：
-- Fast-DDS 使用系统默认值（208KB）
-- 内部策略与实际缓冲区大小匹配
-- 更稳定的数据传输
-
-### 3.5 数据速度分析
-
-**观察到的现象**：
-- 配置文件和 unset 后，系统监控显示的下载速度都在 5MB/s 范围
-- 雷达数据：0.5MB/帧 × 10Hz = 5MB/s
-
-**为什么速度相同但频率不同**：
-
-| 状态 | 网络速度 | 接收频率 | 丢包率 | 说明 |
-|------|---------|---------|--------|------|
-| 配置文件 | 5MB/s | 0.5-8Hz | 高 | UDP 丢包，缓冲区溢出 |
-| unset | 5MB/s | 更稳定 | 低 | 共享内存减轻负担 |
-
-**关键点**：
-- 网络速度反映的是成功传输的数据量
-- 但丢包会导致完整帧的丢失
-- 即使网络速度相同，丢包率不同会导致接收频率不同
-
-**为什么丢包后速度仍然是 5MB/s**：
-
-```
-假设 10 秒内：
-- 发送 100 帧（10Hz × 10秒）
-- 每帧 0.5MB
-- 总数据量 = 50MB
-
-情况1：接收 100 帧（10Hz）
-- 网络速度 = 50MB / 10秒 = 5MB/s
-- 接收频率 = 10Hz
-
-情况2：接收 5 帧（0.5Hz）
-- 虽然只接收 5 帧，但每帧仍然是 0.5MB
-- 网络速度 = 5 × 0.5MB / 10秒 = 0.25MB/s ❌
-
-等等，这不对。让我重新分析。
-```
-
-**重新分析**：
-
-实际上，系统监控显示的"下载速度"可能包括：
-1. 成功接收的完整帧
-2. 部分接收的分片（虽然最终被丢弃）
-
-```
-情况1：配置文件（丢包严重）
-- 发送 100 帧，每帧 354 个 UDP 包
-- 接收 5 帧完整（5 × 354 = 1770 个包）
-- 接收 95 帧部分（95 × 138 = 13110 个包，但不完整）
-- 总接收包数 = 1770 + 13110 = 14880 个包
-- 总数据量 = 14880 × 1500字节 ≈ 22MB
-- 网络速度 = 22MB / 10秒 ≈ 2.2MB/s
-
-情况2：unset（丢包少）
-- 发送 100 帧，每帧 354 个 UDP 包
-- 接收 90 帧完整（90 × 354 = 31860 个包）
-- 接收 10 帧部分（10 × 138 = 1380 个包）
-- 总接收包数 = 31860 + 1380 = 33240 个包
-- 总数据量 = 33240 × 1500字节 ≈ 50MB
-- 网络速度 = 50MB / 10秒 = 5MB/s
-```
-
-**结论**：
-- 如果两种情况下网络速度都是 5MB/s，说明接收的 UDP 包数量相同
-- 但配置文件情况下，很多包是不完整帧的分片，最终被丢弃
-- unset 情况下，大部分包能组成完整帧
-
-### 3.6 雷达数据要不要走 TCP
+### 3.2 TCP vs UDP 对比分析
 
 **TCP vs UDP 对比**：
 
@@ -1584,341 +810,9 @@ TCP 是面向连接的协议：
    - 保持 `BEST_EFFORT`（不要改为 `RELIABLE`）
    - 设置 `depth=1`（只保留最新的一帧）
 
-### 3.7 解决方案
+如果是像地图这种数据的话可以采用TCP
 
-**方案1：使用默认配置（推荐）**
-
-```bash
-# 不设置 FASTRTPS_DEFAULT_PROFILES_FILE
-unset FASTRTPS_DEFAULT_PROFILES_FILE
-
-# 增加系统缓冲区
-sudo sysctl -w net.core.rmem_max=67108864   # 64MB
-sudo sysctl -w net.core.wmem_max=67108864   # 64MB
-sudo sysctl -w net.core.rmem_default=16777216  # 16MB
-```
-
-**优点**：
-- 启用共享内存，减轻网络负担
-- Fast-DDS 自动选择最优传输方式
-- 配置简单，不易出错
-
-**方案2：优化 XML 配置**
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<dds>
-    <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-        <transport_descriptors>
-            <transport_descriptor>
-                <transport_id>UDPv4Transport</transport_id>
-                <type>UDPv4</type>
-                <interfaceWhiteList>
-                    <address>192.168.0.100</address>
-                </interfaceWhiteList>
-                <sendBufferSize>67108864</sendBufferSize>      <!-- 64MB -->
-                <receiveBufferSize>67108864</receiveBufferSize> <!-- 64MB -->
-            </transport_descriptor>
-            <transport_descriptor>
-                <transport_id>SHMTransport</transport_id>
-                <type>SHM</type>
-            </transport_descriptor>
-        </transport_descriptors>
-        <participant profile_name="default_participant" is_default_profile="true">
-            <rtps>
-                <userTransports>
-                    <transport_id>UDPv4Transport</transport_id>
-                    <transport_id>SHMTransport</transport_id>
-                </userTransports>
-                <useBuiltinTransports>false</useBuiltinTransports>
-            </rtps>
-        </participant>
-    </profiles>
-</dds>
-```
-
-**关键改进**：
-- 移除 `127.0.0.1`（不需要，共享内存会处理本地通信）
-- 显式添加 `SHMTransport`（共享内存传输）
-- 同时启用 UDP 和 SHM
-- 增加 buffer 大小到 64MB（匹配系统配置）
-
-**方案3：减少系统负载**
-
-```bash
-# 关闭不必要的应用程序
-# 使用轻量级的可视化工具
-
-# 设置 ROS2 进程的优先级
-sudo renice -n -10 -p $(pgrep -f "ros2")
-
-# 设置 CPU 性能模式（禁用省电）
-sudo cpupower frequency-set -g performance
-
-# 禁用不必要的网络接口
-sudo ip link set wlan0 down  # 禁用 WiFi
-```
-
-**方案4：监控和验证**
-
-```bash
-# 监控接收频率
-ros2 topic hz /livox/lidar_front
-
-# 监控 UDP 丢包统计
-watch -n 1 'netstat -su | grep -i "receive buffer errors"'
-
-# 监控 CPU 负载
-htop
-
-# 查看实际的 socket 缓冲区大小
-sudo ss -u -a -n -p -m | grep ros
-```
-
-### 3.8 总结
-
-**为什么 x86 稳定**：
-1. 专用环境，CPU 负载低
-2. 短距离连接，网络质量好
-3. 单一网络接口，无路由冲突
-4. 可能已优化系统配置
-
-**为什么用户电脑不稳定**：
-1. 多任务环境，CPU 负载高
-2. 网络接口复杂，可能有路由冲突
-3. 未优化系统配置，缓冲区太小
-4. 处理延迟大，缓冲区容易溢出
-
-**为什么 unset 后更稳定**：
-1. 启用共享内存，减轻网络负担
-2. 不限制接口，Fast-DDS 自动选择最优路径
-3. 缓冲区设置与实际大小匹配
-
-**雷达数据不应该走 TCP**：
-1. 实时性优先，TCP 延迟高
-2. 允许丢帧，不需要可靠传输
-3. TCP 的队头阻塞和重传机制违背实时性要求
-
-**推荐方案**：
-1. 使用默认配置（unset FASTRTPS_DEFAULT_PROFILES_FILE）
-2. 增加系统缓冲区到 64MB
-3. 减少系统负载，优化 CPU 性能
-4. 监控和验证配置是否生效
-
-### 3.8 如果方案1没有效果怎么办
-
-**现象**：采用了方案1（unset FASTRTPS_DEFAULT_PROFILES_FILE），但丢包情况没有改善，仍然看到 `A message was lost!!!`
-
-**原因分析**：
-
-方案1 主要解决的是 interfaceWhiteList 导致的 CPU 占用高的问题，但如果丢包仍然严重，说明问题可能在其他地方：
-
-1. **WiFi 多播干扰**（最可能）
-   - 即使使用默认配置，WiFi 上的多播包仍然会到达网卡
-   - 占用内核缓冲区，导致有线网的数据包丢失
-
-2. **系统缓冲区仍然太小**
-   - 虽然增加了 receiveBufferSize，但系统限制可能没有增加
-   - 需要增加 `net.core.rmem_max`
-
-3. **CPU 负载仍然高**
-   - 应用程序处理不过来
-   - 缓冲区积压，新包到达时缓冲区满
-
-4. **多播风暴**
-   - WiFi 上有多个机器人同时发送多播
-   - 导致网络拥塞
-
-#### 进一步诊断
-
-**步骤1：检查是否有 iptables 规则**
-
-```bash
-# 查看 iptables 规则
-sudo iptables -L INPUT -n -v | grep DROP
-
-# 如果没有输出，说明没有禁用 WiFi 多播
-# 这可能是主要原因！
-```
-
-**步骤2：检查系统缓冲区**
-
-```bash
-# 查看当前缓冲区设置
-sysctl net.core.rmem_max
-sysctl net.core.rmem_default
-
-# 应该是 67108864（64MB）
-# 如果是 212992（208KB），说明缓冲区太小
-```
-
-**步骤3：监控 UDP 丢包**
-
-```bash
-# 实时监控丢包统计
-watch -n 1 'netstat -su | grep -E "receive buffer errors|packet receive errors"'
-
-# 如果 "receive buffer errors" 在快速增加，说明缓冲区满了
-```
-
-**步骤4：检查 WiFi 多播流量**
-
-```bash
-# 查看 WiFi 上的多播包数量
-sudo tcpdump -i wlp0s20f3 -n 'dst 239.255.0.1 or dst 224.0.0.251' -c 50 | wc -l
-
-# 如果数量很多（> 20），说明有多播风暴
-```
-
-#### 进一步优化
-
-**优化1：禁用 WiFi 多播（最重要）**
-
-```bash
-# 立即生效
-sudo iptables -I INPUT -i wlp0s20f3 -d 239.255.0.1 -j DROP
-sudo iptables -I OUTPUT -o wlp0s20f3 -d 239.255.0.1 -j DROP
-
-# 永久保存
-sudo apt-get install iptables-persistent
-sudo netfilter-persistent save
-```
-
-**为什么这很重要**：
-- 即使使用默认配置，WiFi 多播包仍然会被内核处理
-- 这些包会占用内核缓冲区
-- 导致有线网的点云数据分片无法进入缓冲区
-- 一次可能丢失多个分片（如 13 个）
-
-**优化2：确保系统缓冲区已增加**
-
-```bash
-# 检查当前设置
-sysctl net.core.rmem_max
-
-# 如果不是 64MB，执行以下命令
-sudo sysctl -w net.core.rmem_max=67108864
-sudo sysctl -w net.core.wmem_max=67108864
-
-# 永久设置
-echo "net.core.rmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-echo "net.core.wmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-```
-
-**优化3：减少 CPU 负载**
-
-```bash
-# 关闭不必要的应用程序
-# 或者提高 ROS2 进程的优先级
-sudo renice -n -10 -p $(pgrep -f "ros2")
-
-# 设置 CPU 性能模式
-sudo cpupower frequency-set -g performance
-```
-
-#### 完整诊断和修复脚本
-
-```bash
-#!/bin/bash
-
-echo "=== Fast-DDS 丢包诊断和修复 ==="
-echo ""
-
-echo "1. 检查 iptables 规则..."
-if sudo iptables -L INPUT -n -v | grep -q "DROP.*239.255.0.1"; then
-    echo "✓ WiFi 多播已禁用"
-else
-    echo "✗ WiFi 多播未禁用，添加规则..."
-    sudo iptables -I INPUT -i wlp0s20f3 -d 239.255.0.1 -j DROP
-    sudo iptables -I OUTPUT -o wlp0s20f3 -d 239.255.0.1 -j DROP
-    echo "✓ 规则已添加"
-fi
-echo ""
-
-echo "2. 检查系统缓冲区..."
-rmem_max=$(sysctl -n net.core.rmem_max)
-if [ "$rmem_max" -ge 67108864 ]; then
-    echo "✓ 缓冲区已设置为 64MB 或更大"
-else
-    echo "✗ 缓冲区太小（$rmem_max），增加到 64MB..."
-    sudo sysctl -w net.core.rmem_max=67108864
-    sudo sysctl -w net.core.wmem_max=67108864
-    echo "✓ 缓冲区已增加"
-fi
-echo ""
-
-echo "3. 检查 UDP 丢包统计..."
-netstat -su | grep -E "receive buffer errors|packet receive errors"
-echo ""
-
-echo "4. 检查 CPU 占用..."
-top -b -n 1 | grep -E "Cpu|ros" | head -3
-echo ""
-
-echo "5. 检查 WiFi 多播流量..."
-echo "过去 5 秒内的多播包数："
-sudo timeout 5 tcpdump -i wlp0s20f3 -n 'dst 239.255.0.1 or dst 224.0.0.251' 2>/dev/null | wc -l
-echo ""
-
-echo "=== 诊断完成 ==="
-echo "建议："
-echo "1. 如果 WiFi 多播未禁用，已自动添加规则"
-echo "2. 如果缓冲区太小，已自动增加"
-echo "3. 等待 10 秒后重新测试丢包情况"
-```
-
-保存为 `fix_packet_loss.sh`，然后运行：
-
-```bash
-chmod +x fix_packet_loss.sh
-./fix_packet_loss.sh
-
-# 等待 10 秒后测试
-sleep 10
-ros2 topic echo /livox/lidar_front --field header.stamp | head -20
-```
-
-#### 预期效果
-
-**修复前**：
-```
-A message was lost!!!
-    total count change:13
-    total count: 13
-```
-
-**修复后**：
-```
-# 应该看不到 "message was lost" 或者数量大幅减少
-# 接收频率应该稳定在 10Hz
-```
-
-#### 总结
-
-**如果方案1没有效果**：
-
-1. **最可能的原因**：WiFi 多播干扰
-   - 需要添加 iptables 规则禁用 WiFi 多播
-   - 这是最重要的一步
-
-2. **其次的原因**：系统缓冲区未增加
-   - 需要确保 `net.core.rmem_max` 已设置为 64MB
-
-3. **最后的原因**：CPU 负载高
-   - 需要减少系统负载
-   - 或者提高 ROS2 进程的优先级
-
-**推荐做法**：
-1. 运行诊断脚本
-2. 根据输出结果进行修复
-3. 等待 10 秒后重新测试
-
----
-
-## 问题4：FASTDDS_BUILTIN_TRANSPORTS 的工作原理
-
-### 4.1 什么是 FASTDDS_BUILTIN_TRANSPORTS
+### 3.3 FASTDDS_BUILTIN_TRANSPORTS 概览
 
 `FASTDDS_BUILTIN_TRANSPORTS` 是 Fast-DDS 的环境变量，用于控制默认启用的传输方式。
 
@@ -1933,9 +827,9 @@ A message was lost!!!
 | `SHM` | 只启用共享内存 | SHM |
 | `LARGE_DATA` | 大数据模式 | UDPv4 + TCPv4 + SHM |
 
-### 4.2 源码分析：工作原理
+### 3.4 源码分析：工作原理
 
-#### 4.2.1 环境变量读取
+#### 3.4.1 环境变量读取
 
 ```cpp
 // 文件：src/cpp/rtps/participant/RTPSParticipantImpl.cpp
@@ -1974,7 +868,7 @@ static BuiltinTransports get_builtin_transports_from_env_var()
 }
 ```
 
-#### 4.2.2 传输初始化
+#### 3.4.2 传输初始化
 
 ```cpp
 // 文件：src/cpp/rtps/participant/RTPSParticipantImpl.cpp
@@ -1993,7 +887,7 @@ if (m_att.useBuiltinTransports)
 - 只有当 `useBuiltinTransports == true` 时，才会读取环境变量
 - 如果 `useBuiltinTransports == false`，环境变量会被忽略
 
-#### 4.2.3 setup_transports 实现
+#### 3.4.3 setup_transports 实现
 
 ```cpp
 // 文件：src/cpp/rtps/attributes/RTPSParticipantAttributes.cpp
@@ -2060,7 +954,7 @@ void RTPSParticipantAttributes::setup_transports(
 - `setup_transports()` 会自动设置 `useBuiltinTransports = false`（第 305 行）
 - 这样可以避免重复创建传输
 
-#### 4.2.4 DEFAULT 模式实现
+#### 3.4.4 DEFAULT 模式实现
 
 ```cpp
 // 文件：src/cpp/rtps/attributes/RTPSParticipantAttributes.cpp
@@ -2113,7 +1007,7 @@ static std::shared_ptr<fastdds::rtps::UDPv4TransportDescriptor> create_udpv4_tra
 }
 ```
 
-#### 4.2.5 LARGE_DATA 模式实现
+#### 3.4.5 LARGE_DATA 模式实现
 
 ```cpp
 // 文件：src/cpp/rtps/attributes/RTPSParticipantAttributes.cpp
@@ -2241,11 +1135,11 @@ void ParticipantImpl::create_large_data_transports()
 }
 ```
 
-### 4.3 传输选择策略
+### 3.5 传输选择策略
 
 Fast-DDS 根据通信场景自动选择最优的传输方式。虽然源码中没有一个单独的 `select_transport()` 函数，但传输选择是通过以下机制实现的：
 
-#### 4.3.1 传输优先级
+#### 3.5.1 传输优先级
 
 当创建多个传输时（如 DEFAULT 模式创建 UDPv4 + SHM），Fast-DDS 会按照以下优先级选择：
 
@@ -2267,7 +1161,7 @@ att.userTransports.push_back(udp_descriptor); // 后添加 UDP
 // SHM 不支持跨机器通信
 ```
 
-#### 4.3.2 LARGE_DATA 模式的传输选择
+#### 3.5.2 LARGE_DATA 模式的传输选择
 
 在 LARGE_DATA 模式下，传输选择更加复杂：
 
@@ -2300,7 +1194,7 @@ att.userTransports.push_back(udp_descriptor);
 - 大数据（>= 64KB）：使用 TCP
 - 本地通信：始终优先使用 SHM
 
-#### 4.3.3 传输选择的实际行为
+#### 3.5.3 传输选择的实际行为
 
 **示例：Orin 上的节点 A 发布数据**
 
@@ -2330,7 +1224,7 @@ att.userTransports.push_back(udp_descriptor);
 使用 TCP 传输（可靠、无分片限制）
 ```
 
-### 4.4 LARGE_DATA 模式的数据传输策略
+### 3.6 LARGE_DATA 模式的数据传输策略
 
 **数据大小阈值**：
 
@@ -2363,321 +1257,43 @@ else
 使用 TCP 传输
 ```
 
-### 4.5 大数据走 TCP 的优缺点
+### 3.7 LARGE_DATA 模式的权衡分析
 
-**优点**：
+#### TCP 传输的优势
 
-#### 优点1：可靠传输
+| 优势 | 说明 |
+|------|------|
+| 可靠传输 | 每个包有序列号 + ACK 确认，丢包自动重传，保证数据完整 |
+| 无 IP 分片 | 流式传输，不受 MTU 限制，避免 IP fragment 重组失败导致的雪崩丢包 |
+| 拥塞控制 | 自动检测网络拥塞并调整发送速率，避免网络过载 |
 
-```
-TCP 保证数据送达：
-- 每个数据包都有序列号
-- 接收方发送 ACK 确认
-- 如果丢包，自动重传
-- 保证数据完整性
-```
+#### TCP 传输的劣势（详见 3.2 节）
 
-**对比 UDP**：
+TCP 的可靠性机制恰恰是实时数据的敌人：
+- **队头阻塞**：前面的帧丢包时，后面已到达的帧被阻塞，延迟累积
+- **重传延迟**：丢包后需要等待 RTT 重传，局域网下也有 20-40ms 额外延迟
+- **拥塞控制副作用**：丢包触发慢启动，发送速率从 1 个 MSS 逐步恢复，导致吞吐量波动
 
-| 场景 | UDP | TCP |
-|------|-----|-----|
-| 发送 354 个包 | 可能丢失部分包 | 保证全部送达 |
-| 丢包处理 | 整个消息丢弃 | 自动重传 |
-| 数据完整性 | 不保证 | 保证 |
+#### 部署风险
 
-#### 优点2：无分片限制
+| 风险 | 说明 |
+|------|------|
+| 连接数爆炸 | N 个节点需要 N×(N-1) 个 TCP 连接，50 个节点 = 2450 个连接 |
+| 端口耗尽 | 系统默认可用端口约 28000 个，大规模系统可能不够 |
+| 防火墙复杂 | TCP 需要双向通信，需要开放大量端口范围 |
 
-```
-UDP：
-- 受 MTU 限制（1500 字节）
-- 大数据需要分片（354 个包）
-- 任何一个分片丢失，整个消息丢弃
-
-TCP：
-- 流式传输，无分片概念
-- 数据按字节流传输
-- 部分数据丢失，只重传丢失的部分
-```
-
-#### 优点3：拥塞控制
-
-```
-TCP 的拥塞控制：
-- 检测网络拥塞
-- 自动降低发送速率
-- 避免网络过载
-- 提高整体吞吐量
-```
-
-**缺点**：
-
-#### 缺点1：延迟高
-
-**三次握手**：
-
-```
-客户端 → SYN → 服务器
-服务器 → SYN-ACK → 客户端
-客户端 → ACK → 服务器
-
-总延迟：3 × RTT ≈ 3-15ms（局域网）
-```
-
-**重传延迟**：
-
-```
-发送数据包 → 丢失
-    ↓
-等待超时（RTO，通常 200ms）
-    ↓
-重传数据包
-    ↓
-总延迟：200ms+
-```
-
-**队头阻塞**：
-
-```
-帧1 → 部分数据丢失 → 等待重传
-帧2 → 已到达，但被阻塞
-帧3 → 已到达，但被阻塞
-
-延迟：所有后续帧都被阻塞
-```
-
-#### 缺点2：开销大
-
-**TCP 头部**：
-
-```
-TCP 头部：20 字节（最小）
-UDP 头部：8 字节
-
-开销差异：12 字节/包
-```
-
-**连接状态**：
-
-```
-TCP 需要维护：
-- 发送缓冲区
-- 接收缓冲区
-- 序列号
-- ACK 号
-- 拥塞窗口
-- 重传定时器
-
-内存开销：每个连接约 4KB
-```
-
-**ACK 包**：
-
-```
-TCP 需要发送 ACK 确认包：
-- 每接收一定量数据，发送一个 ACK
-- 增加网络流量
-- 增加 CPU 处理负担
-```
-
-#### 缺点3：不适合实时数据
-
-**实时性要求**：
-
-```
-雷达数据：
-- 需要最新的数据
-- 旧数据无用
-- 延迟 > 100ms 就失去意义
-
-TCP 的问题：
-- 重传机制导致延迟增加
-- 队头阻塞导致旧数据延迟到达
-- 违背实时性要求
-```
-
-**例子**：
-
-```
-时刻 T0：发送帧1
-时刻 T0 + 100ms：帧1 部分数据丢失，等待重传
-时刻 T0 + 100ms：发送帧2（最新数据）
-时刻 T0 + 200ms：帧1 重传完成，传递给应用程序
-时刻 T0 + 210ms：帧2 传递给应用程序
-
-问题：应用程序先收到旧数据（帧1），后收到新数据（帧2）
-```
-
-### 4.6 潜在风险
-
-#### 风险1：连接管理开销
-
-**多节点系统**：
-
-```
-假设有 N 个节点，每个节点都发布和订阅数据：
-    ↓
-需要建立的 TCP 连接数 = N × (N - 1)
-    ↓
-10 个节点：90 个连接
-20 个节点：380 个连接
-50 个节点：2450 个连接
-```
-
-**每个连接的开销**：
-
-| 资源 | 每个连接 | 10 个节点 | 50 个节点 |
-|------|---------|----------|----------|
-| 内存 | 4KB | 360KB | 9.8MB |
-| 文件描述符 | 1 | 90 | 2450 |
-| CPU（维护） | 0.1% | 9% | 245% ❌ |
-
-**风险**：
-- 节点数增加，连接数呈平方增长
-- 可能耗尽系统资源
-- CPU 负载过高
-
-#### 风险2：端口耗尽
-
-**TCP 端口分配**：
-
-```bash
-# 查看系统的端口范围
-sysctl net.ipv4.ip_local_port_range
-# 输出：32768 61000（约 28000 个可用端口）
-```
-
-**端口使用**：
-
-```
-每个 TCP 连接需要一个端口：
-- 客户端：动态分配（32768-61000）
-- 服务器：固定端口（如 7400）
-
-如果连接数 > 28000：
-    ↓
-端口耗尽
-    ↓
-无法建立新连接
-```
-
-**风险**：
-- 大规模系统可能耗尽端口
-- 需要调整系统参数
-
-#### 风险3：防火墙问题
-
-**TCP 连接需要双向通信**：
-
-```
-节点 A → 连接请求 → 节点 B
-节点 B → 接受连接 → 节点 A
-节点 A ↔ 数据传输 ↔ 节点 B
-```
-
-**防火墙规则**：
-
-```bash
-# 需要开放大量端口
-sudo iptables -A INPUT -p tcp --dport 7400:7500 -j ACCEPT
-sudo iptables -A OUTPUT -p tcp --sport 7400:7500 -j ACCEPT
-```
-
-**风险**：
-- 防火墙可能阻止 TCP 连接
-- 需要配置复杂的防火墙规则
-- 安全风险增加
-
-#### 风险4：性能下降
-
-**拥塞控制的副作用**：
-
-```
-网络出现丢包
-    ↓
-TCP 检测到拥塞
-    ↓
-降低发送速率（慢启动）
-    ↓
-吞吐量下降
-    ↓
-延迟增加
-```
-
-**慢启动过程**：
-
-```
-初始拥塞窗口：1 个 MSS（最大段大小，约 1460 字节）
-    ↓
-每收到一个 ACK，窗口 +1
-    ↓
-窗口大小：1 → 2 → 4 → 8 → 16 → ...
-    ↓
-需要多个 RTT 才能达到最大速率
-```
-
-**影响**：
-- 每次丢包后，速率重新慢启动
-- 导致吞吐量波动
-- 不适合稳定的实时数据传输
-
-### 4.7 雷达数据是否应该使用 LARGE_DATA 模式
-
-**分析**：
+#### 结论：雷达数据不应该使用 LARGE_DATA 模式
 
 | 因素 | UDP（DEFAULT） | TCP（LARGE_DATA） | 推荐 |
 |------|---------------|------------------|------|
-| 数据大小 | 0.5MB/帧 | 0.5MB/帧 | - |
-| 实时性 | 高（低延迟） | 低（重传延迟） | UDP ✅ |
-| 可靠性 | 低（可能丢包） | 高（保证送达） | - |
+| 实时性 | 高（低延迟） | 低（重传 + 队头阻塞） | UDP ✅ |
+| 可靠性 | 中（可能丢包） | 高（保证送达） | - |
 | 开销 | 低 | 高（连接管理） | UDP ✅ |
-| 适用性 | ✅ 适合 | ❌ 不适合 | UDP ✅ |
+| 适用性 | ✅ 适合实时传感器 | ❌ 不适合 | UDP ✅ |
 
-**结论：不应该使用 LARGE_DATA 模式**
+雷达数据 10Hz、0.5MB/帧，实时性优先，偶尔丢帧可接受。正确做法是优化 UDP 链路（调大 ipfrag 缓冲区、socket 缓冲区），而不是换 TCP。
 
-**原因**：
-
-1. **实时性优先**：
-   - 雷达数据需要低延迟
-   - TCP 的重传机制违背实时性
-   - 队头阻塞导致旧数据延迟到达
-
-2. **允许丢帧**：
-   - 偶尔丢失一帧不会影响整体功能
-   - 机器人可以使用上一帧的数据
-   - 不需要 TCP 的可靠传输
-
-3. **开销大**：
-   - TCP 连接管理开销大
-   - 不适合高频数据传输（10Hz）
-   - 可能导致系统资源耗尽
-
-4. **性能问题**：
-   - TCP 的拥塞控制导致吞吐量波动
-   - 不适合稳定的实时数据传输
-
-**正确的做法**：
-
-1. **使用默认的 UDP 传输**：
-   ```bash
-   export FASTDDS_BUILTIN_TRANSPORTS=DEFAULT
-   # 或者不设置，使用默认值
-   ```
-
-2. **优化系统缓冲区**：
-   ```bash
-   sudo sysctl -w net.core.rmem_max=67108864  # 64MB
-   sudo sysctl -w net.core.wmem_max=67108864  # 64MB
-   ```
-
-3. **使用共享内存**：
-   - 本地通信走 SHM
-   - 远程通信走 UDP
-
-4. **减少数据量**：
-   - 降采样或降低频率
-   - 如果仍然丢包
-
-### 4.8 LARGE_DATA 模式的适用场景
+### 3.8 LARGE_DATA 模式的适用场景
 
 **适用场景**：
 
@@ -2755,9 +1371,9 @@ TCP 检测到拥塞
 推荐：使用 DEFAULT 模式（UDP + SHM）
 ```
 
-### 4.9 推荐配置
+### 3.9 推荐配置
 
-#### 4.9.1 场景1：实时传感器数据（雷达、相机）- 推荐
+#### 3.9.1 场景1：实时传感器数据（雷达、相机）- 推荐
 
 **使用环境变量**：
 
@@ -2814,7 +1430,7 @@ sudo sysctl -w net.core.wmem_max=67108864
 - 本地通信走共享内存（高效）
 - 远程通信走 UDP（低延迟）
 
-#### 4.9.2 场景2：大数据传输（地图、录制数据）
+#### 3.9.2 场景2：大数据传输（地图、录制数据）
 
 **使用环境变量**：
 
@@ -2914,7 +1530,7 @@ sudo sysctl -w net.core.wmem_max=67108864
 - 延迟高，不适合实时数据
 - 连接管理开销大
 
-#### 4.9.3 场景3：只需要本地通信
+#### 3.9.3 场景3：只需要本地通信
 
 **使用环境变量**：
 
@@ -2956,7 +1572,7 @@ export FASTDDS_BUILTIN_TRANSPORTS=SHM
 **缺点**：
 - 只能用于同一台机器的进程间通信
 
-#### 4.9.4 场景4：完全自定义
+#### 3.9.4 场景4：完全自定义
 
 **使用环境变量**：
 
@@ -2993,7 +1609,7 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/config.xml
 </dds>
 ```
 
-#### 4.9.5 配置对比总结
+#### 3.9.5 配置对比总结
 
 | 场景 | 环境变量 | 传输组合 | 适用数据 | 延迟 | 可靠性 |
 |------|---------|---------|---------|------|--------|
@@ -3003,7 +1619,7 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/config.xml
 | 只用 UDP | UDPv4 | UDP | 小数据 | 低 | 低 |
 | 自定义 | NONE | 自定义 | 取决于配置 | - | - |
 
-### 4.10 总结
+### 3.10 总结
 
 **FASTDDS_BUILTIN_TRANSPORTS 的作用**：
 - 控制 Fast-DDS 默认启用的传输方式
@@ -3034,117 +1650,16 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/config.xml
 
 ---
 
-## 总结
+## 问题4：如果只设置了白名单，没有设置防火墙的话，CPU占用会高很多，这是什么原因
 
-### 核心问题和解决方案
-
-**问题1：为什么用户电脑需要设置 buffer**
-- **原因**：系统默认缓冲区可能很小，Fast-DDS 自动调整只到 64KB
-- **解决**：配置 receiveBufferSize 触发 set_option()，或增加 net.core.rmem_max
-
-**问题2：节点订阅数据的完整链路**
-- **链路**：网卡 → 内核缓冲区 → 应用层缓冲区 → 分片重组 → 反序列化 → 用户回调
-- **关键**：内核缓冲区最关键，满了会导致内核级丢包
-
-**问题3：为什么用户电脑频率不稳定**
-- **原因**：多任务环境，CPU 负载高，缓冲区太小
-- **unset 后更稳定**：启用共享内存，减轻网络负担
-- **TCP 不适合**：延迟高，队头阻塞，违背实时性
-
-**问题4：FASTDDS_BUILTIN_TRANSPORTS 的工作原理**
-- **作用**：控制默认传输方式
-- **LARGE_DATA**：启用 TCP，适合大数据但不适合实时数据
-- **推荐**：雷达数据使用 DEFAULT 模式（UDP + SHM）
-
-### 最终推荐配置
-
-```bash
-# 1. 增加系统缓冲区（所有机器）
-sudo sysctl -w net.core.rmem_max=67108864   # 64MB
-sudo sysctl -w net.core.wmem_max=67108864   # 64MB
-sudo sysctl -w net.core.rmem_default=16777216  # 16MB
-
-# 永久设置
-echo "net.core.rmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-echo "net.core.wmem_max=67108864" | sudo tee -a /etc/sysctl.conf
-echo "net.core.rmem_default=16777216" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-
-# 2. 使用默认配置（推荐）
-unset FASTRTPS_DEFAULT_PROFILES_FILE
-export FASTDDS_BUILTIN_TRANSPORTS=DEFAULT
-
-# 3. 或者使用优化的 XML 配置
-export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/optimized_config.xml
-```
-
-**优化的 XML 配置**：
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<dds>
-    <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-        <transport_descriptors>
-            <transport_descriptor>
-                <transport_id>UDPv4Transport</transport_id>
-                <type>UDPv4</type>
-                <interfaceWhiteList>
-                    <address>192.168.0.100</address>
-                </interfaceWhiteList>
-                <sendBufferSize>67108864</sendBufferSize>      <!-- 64MB -->
-                <receiveBufferSize>67108864</receiveBufferSize> <!-- 64MB -->
-            </transport_descriptor>
-            <transport_descriptor>
-                <transport_id>SHMTransport</transport_id>
-                <type>SHM</type>
-            </transport_descriptor>
-        </transport_descriptors>
-        <participant profile_name="default_participant" is_default_profile="true">
-            <rtps>
-                <userTransports>
-                    <transport_id>UDPv4Transport</transport_id>
-                    <transport_id>SHMTransport</transport_id>
-                </userTransports>
-                <useBuiltinTransports>false</useBuiltinTransports>
-            </rtps>
-        </participant>
-    </profiles>
-</dds>
-```
-
-### 验证配置
-
-```bash
-# 1. 验证系统缓冲区
-sysctl net.core.rmem_max
-sysctl net.core.wmem_max
-
-# 2. 启动 ROS2 节点后，查看实际的 socket 缓冲区
-sudo ss -u -a -n -p -m | grep ros
-
-# 3. 监控接收频率
-ros2 topic hz /livox/lidar_front
-
-# 4. 监控丢包统计
-watch -n 1 'netstat -su | grep -i "receive buffer errors"'
-
-# 5. 监控 CPU 负载
-htop
-```
-
-
----
-
-## 问题5：如果只设置了白名单，没有设置防火墙的话，CPU占用会高很多，这是什么原因
-
-### 5.1 问题现象
+### 4.1 问题现象
 
 **观察到的现象**：
 - 只设置 interfaceWhiteList：CPU 占用高
 - 同时设置 interfaceWhiteList + iptables DROP：CPU 占用低
 - 差异明显，可能相差 20-50%
 
-### 5.2 根本原因：处理层级不同
+### 4.2 根本原因：处理层级不同
 
 #### interfaceWhiteList 的工作原理
 
@@ -3191,7 +1706,7 @@ sudo iptables -I INPUT -i wlp0s20f3 -d 239.255.0.1 -j DROP
 
 **优势**：在内核级别提前丢弃，避免后续处理。
 
-### 5.3 CPU 占用的详细对比
+### 4.3 CPU 占用的详细对比
 
 #### 没有 iptables 时（CPU 占用高）
 
@@ -3241,7 +1756,7 @@ iptables 规则匹配 → DROP        ← 停止处理！
 
 **总 CPU 占用**：60%（只执行前 5 步）
 
-### 5.4 是否有节点在尝试通讯
+### 4.4 是否有节点在尝试通讯
 
 **可能性分析**：
 
@@ -3287,7 +1802,7 @@ sudo iftop -i wlp0s20f3 -n
 sudo tcpdump -i wlp0s20f3 -n 'dst 239.255.0.1 or dst 224.0.0.251' -c 100 | wc -l
 ```
 
-### 5.5 解决方案
+### 4.5 解决方案
 
 #### 方案1：保持 iptables 规则（推荐）
 
@@ -3375,7 +1890,7 @@ nmcli radio wifi on
 - 需要配置 Discovery Server（用于节点发现）
 - 配置相对复杂
 
-### 5.6 方案对比总结
+### 4.6 方案对比总结
 
 | 方案 | CPU 占用 | 配置难度 | 需要权限 | 推荐度 |
 |------|---------|---------|---------|--------|
@@ -3384,7 +1899,7 @@ nmcli radio wifi on
 | 禁用 WiFi 接口 | 最低 | 简单 | 是 | ⭐⭐⭐ |
 | 禁用多播 | 低 | 中等 | 否 | ⭐⭐⭐⭐ |
 
-### 5.7 最终建议
+### 4.7 最终建议
 
 **快速解决**（推荐）：
 ```bash
@@ -3401,7 +1916,7 @@ sudo netfilter-persistent save
 - 如果不需要 WiFi：禁用 WiFi 接口
 - 如果需要 WiFi：使用禁用多播的配置
 
-### 5.8 总结
+### 4.8 总结
 
 **为什么 CPU 占用会高**：
 - interfaceWhiteList 只在应用层过滤
@@ -3425,16 +1940,16 @@ sudo netfilter-persistent save
 
 ---
 
-## 问题6：为什么必须设置 useBuiltinTransports=false
+## 问题5：为什么必须设置 useBuiltinTransports=false
 
-### 6.1 问题现象
+### 5.1 问题现象
 
 **观察到的现象**：
 - 配置了 `receiveBufferSize=67108864`（64MB）
 - 但是 UDP 仍然丢包
 - 实际缓冲区可能仍然是默认的 208KB
 
-### 6.2 useBuiltinTransports 的作用
+### 5.2 useBuiltinTransports 的作用
 
 #### useBuiltinTransports=true（默认）
 
@@ -3495,7 +2010,7 @@ Fast-DDS 自动启用内置传输：
 - 可以限制网络接口
 - 避免传输冲突
 
-### 6.3 为什么会有传输冲突
+### 5.3 为什么会有传输冲突
 
 #### 场景：同时启用内置和自定义传输
 
@@ -3536,7 +2051,7 @@ Fast-DDS 会同时创建：
 - 仍然丢包
 ```
 
-### 6.4 正确的配置
+### 5.4 正确的配置
 
 #### 完整配置示例
 
@@ -3595,7 +2110,7 @@ Fast-DDS 会同时创建：
    - 自动用于同一台机器的进程间通信
    - UDP 只用于远程通信
 
-### 6.5 传输选择逻辑
+### 5.5 传输选择逻辑
 
 **Fast-DDS 如何选择传输**：
 
@@ -3626,7 +2141,7 @@ Orin 上的节点 A 发布数据：
   → 使用 UDP（64MB 缓冲区）
 ```
 
-### 6.6 常见错误
+### 5.6 常见错误
 
 #### 错误1：注释掉 useBuiltinTransports
 
@@ -3665,7 +2180,7 @@ Orin 上的节点 A 发布数据：
 - 效率低下
 - 占用网络带宽和缓冲区
 
-### 6.7 验证配置是否生效
+### 5.7 验证配置是否生效
 
 #### 方法1：检查 socket 缓冲区
 
@@ -3695,7 +2210,7 @@ netstat -s | grep "receive buffer errors"
 # 如果数字不再增加，说明配置生效
 ```
 
-### 6.8 总结
+### 5.8 总结
 
 **为什么必须设置 useBuiltinTransports=false**：
 
@@ -3722,9 +2237,9 @@ netstat -s | grep "receive buffer errors"
 
 ---
 
-## 问题7：sendBufferSize、receiveBufferSize、sendSocketBufferSize、listenSocketBufferSize 的区别
+## 问题6：sendBufferSize、receiveBufferSize、sendSocketBufferSize、listenSocketBufferSize 的区别
 
-### 7.1 参数概览
+### 6.1 参数概览
 
 Fast-DDS 中有两套 API 用于配置 socket 缓冲区，它们之间存在映射关系：
 
@@ -3738,9 +2253,9 @@ Fast-DDS 中有两套 API 用于配置 socket 缓冲区，它们之间存在映�
 - 新 API 是传输描述符的参数，直接控制 socket 缓冲区
 - 两者最终控制的是同一个东西：socket 的发送和接收缓冲区
 
-### 7.2 sendSocketBufferSize 和 listenSocketBufferSize（旧 API）
+### 6.2 sendSocketBufferSize 和 listenSocketBufferSize（旧 API）
 
-#### 7.2.1 定义位置
+#### 6.2.1 定义位置
 
 ```cpp
 // include/fastdds/rtps/attributes/RTPSParticipantAttributes.h
@@ -3763,7 +2278,7 @@ struct RTPSParticipantAttributes
 };
 ```
 
-#### 7.2.2 使用场景
+#### 6.2.2 使用场景
 
 **旧的 RTPS API**（已弃用，但仍然支持）：
 
@@ -3790,7 +2305,7 @@ RTPSParticipant* participant = RTPSDomain::createParticipant(
 </participant>
 ```
 
-#### 7.2.3 映射关系（关键代码）
+#### 6.2.3 映射关系（关键代码）
 
 **证明：两组参数效果完全一样**
 
@@ -3875,9 +2390,9 @@ descriptor->sendBufferSize = 16MB
 - 旧 API 只是简单地赋值给新 API，没有任何额外处理
 - 无论使用哪组参数，最终都是设置同一个 socket 缓冲区
 
-### 7.3 sendBufferSize 和 receiveBufferSize（新 API）
+### 6.3 sendBufferSize 和 receiveBufferSize（新 API）
 
-#### 7.3.1 定义位置
+#### 6.3.1 定义位置
 
 ```cpp
 // include/fastdds/rtps/transport/SocketTransportDescriptor.h
@@ -3894,7 +2409,7 @@ struct SocketTransportDescriptor : public TransportDescriptorInterface
 };
 ```
 
-#### 7.3.2 使用场景
+#### 6.3.2 使用场景
 
 **新的传输描述符 API**（推荐）：
 
@@ -3925,7 +2440,7 @@ DomainParticipant* participant = DomainParticipantFactory::get_instance()
 </transport_descriptors>
 ```
 
-#### 7.3.3 实际使用
+#### 6.3.3 实际使用
 
 ```cpp
 // src/cpp/rtps/transport/UDPTransportInterface.cpp
@@ -3972,7 +2487,7 @@ bool UDPTransportInterface::init(const PropertyPolicy*)
 }
 ```
 
-### 7.4 四个参数的对比总结
+### 6.4 四个参数的对比总结
 
 | 参数 | API 类型 | 定义位置 | 作用 | 推荐使用 |
 |------|---------|---------|------|---------|
@@ -3981,9 +2496,9 @@ bool UDPTransportInterface::init(const PropertyPolicy*)
 | sendBufferSize | 新 API | SocketTransportDescriptor | 发送缓冲区（直接控制 socket） | ✅ 推荐 |
 | receiveBufferSize | 新 API | SocketTransportDescriptor | 接收缓冲区（直接控制 socket） | ✅ 推荐 |
 
-### 7.5 初始化逻辑详解
+### 6.5 初始化逻辑详解
 
-#### 7.5.1 receiveBufferSize 的初始化
+#### 6.5.1 receiveBufferSize 的初始化
 
 ```cpp
 // UDPTransportInterface.cpp init() 方法
@@ -4041,7 +2556,7 @@ flowchart TD
     style G fill:#e1f5ff,stroke:#01579b,stroke-width:2px
 ```
 
-#### 7.5.2 创建 socket 时的处理
+#### 6.5.2 创建 socket 时的处理
 
 ```cpp
 // UDPv4Transport.cpp OpenInputChannel() 方法
@@ -4076,7 +2591,7 @@ bool UDPv4Transport::OpenInputChannel(const Locator& locator)
 - 如果 `mReceiveBufferSize == 0`，不调用 `set_option()`，使用系统默认值
 - 实际缓冲区大小受系统限制：`min(请求值, net.core.rmem_max)`
 
-### 7.6 实际案例分析
+### 6.6 实际案例分析
 
 #### 案例1：用户电脑（系统默认缓冲区很小）
 
@@ -4170,7 +2685,7 @@ net.core.rmem_default = 212992  # 208KB（假设）
 结果：208KB（勉强够用）
 ```
 
-### 7.7 为什么需要两套 API
+### 6.7 为什么需要两套 API
 
 #### 历史原因
 
@@ -4199,7 +2714,7 @@ if (participant_attr.sendSocketBufferSize != 0)
 - 新项目：使用新 API（sendBufferSize / receiveBufferSize）
 - 旧项目：可以继续使用旧 API，但建议迁移到新 API
 
-### 7.8 配置建议
+### 6.8 配置建议
 
 #### 推荐配置（新 API）
 
@@ -4253,7 +2768,7 @@ if (participant_attr.sendSocketBufferSize != 0)
 - 不够灵活（无法为不同传输设置不同的缓冲区）
 - 可能在未来版本中移除
 
-### 7.9 验证配置是否生效
+### 6.9 验证配置是否生效
 
 ```bash
 # 1. 启动 ROS2 节点后，查看实际的 socket 缓冲区大小
@@ -4272,7 +2787,7 @@ sudo ss -u -a -n -m | grep -E "7400|7401" | grep skmem
 2. 系统限制 `net.core.rmem_max` 太小
 3. XML 配置文件路径错误
 
-### 7.10 总结
+### 6.10 总结
 
 **核心结论：两组参数效果完全一样**
 
@@ -4356,7 +2871,7 @@ listenSocketBufferSize  →    receiveBufferSize    →    socket 接收缓冲�
 | `include/fastdds/rtps/attributes/RTPSParticipantAttributes.h:491-496` | 旧 API 的定义 |
 | `include/fastdds/rtps/transport/SocketTransportDescriptor.h:85-87` | 新 API 的定义 |
 
-## 问题8：接收率低是系统丢了 UDP 包，还是应用程序丢了消息？
+## 问题7：接收率低是系统丢了 UDP 包，还是应用程序丢了消息？
 
 ### 问题背景
 
@@ -4887,356 +3402,12 @@ sudo sysctl -p /etc/sysctl.d/99-ipfrag.conf
 
 判断标准：如果 topic 单帧大小 > MTU（1500字节），就会触发 IP 分片，就需要关注此参数。
 
-### 扩展：涉及的网络知识详解
 
-#### 1. 数据传输链路是怎么来的，每一层分片大小怎么算
-
-##### 整体链路
-
-```
-应用层（ROS2 / Fast-DDS）
-    ↓ RTPS 分片（应用层分片）
-传输层（UDP）
-    ↓ 加 UDP 头（8字节）+ IP 头（20字节）
-网络层（IP）
-    ↓ IP 分片（内核分片）
-数据链路层（以太网）
-    ↓ 加以太网帧头（14字节）
-物理层（网线）
-```
-
-这个链路就是标准的 TCP/IP 五层模型。每一层都有自己的"最大传输单元"，当上层数据超过下层限制时，就需要分片。
-
-##### 各层分片大小的计算
-
-**RTPS 层（应用层分片）**
-
-Fast-DDS 源码中，RTPS fragment size 的计算链路：
-
-```
-s_maximumMessageSize = 65500 字节
-    （定义在 TransportInterface.h:33，UDP 传输的最大消息大小）
-
-→ RTPSParticipantImpl::getMaxMessageSize()
-    返回 min(所有传输的 maxMessageSize, uint32_max) = 65500
-
-→ RTPSParticipantImpl::calculateMaxDataSize(65500)
-    减去 RTPSMESSAGE_HEADER_SIZE = 20 字节（RTPS 协议头）
-    = 65480
-
-→ RTPSWriter::calculateMaxDataSize(65480)
-    减去各子消息头：
-    - info_dst_message_length    = 16 字节（目标信息）
-    - info_ts_message_length     = 12 字节（时间戳）
-    - data_frag_submessage_header = 36 字节（分片子消息头）
-    - heartbeat_message_length   = 32 字节（心跳消息）
-    = 65480 - 96 = 65384
-
-→ 4 字节对齐：65384 & ~3 = 65384 字节
-```
-
-所以每个 RTPS fragment 最大携带约 65KB 的有效数据。一帧雷达数据 0.5MB ÷ 65384 ≈ 8 个 DATA_FRAG。
-
-> 注：实际抓包观察到的 fragment_size 可能略有不同（如 65404），因为还受 flow controller 和安全模块的影响。
-
-**IP 层（内核分片）**
-
-每个 RTPS fragment 作为一个 UDP 包发送，大小约 65KB。但以太网的 MTU（Maximum Transmission Unit）只有 1500 字节。
-
-```
-一个 UDP 包的总大小：
-  RTPS fragment 数据 ≈ 65384 字节
-  + RTPS 头 + 子消息头 ≈ 116 字节
-  + UDP 头 = 8 字节
-  + IP 头 = 20 字节
-  ≈ 65528 字节
-
-以太网 MTU = 1500 字节
-每个 IP fragment 的有效载荷 = 1500 - 20（IP头）= 1480 字节
-
-IP 分片数 = ceil(65528 / 1480) ≈ 45 个 IP fragment
-```
-
-**以太网层**
-
-每个 IP fragment 加上以太网帧头（14字节）后，变成一个以太网帧：
-```
-以太网帧 = 14（帧头）+ 1500（IP包）= 1514 字节
-```
-
-##### 源码位置
-
-| 常量/函数 | 文件 | 行号 |
-|-----------|------|------|
-| `s_maximumMessageSize = 65500` | `include/fastdds/rtps/transport/TransportInterface.h` | 33 |
-| `RTPSMESSAGE_HEADER_SIZE = 20` | `include/fastdds/rtps/common/CDRMessage_t.h` | 37 |
-| `RTPSWriter::getMaxDataSize()` | `src/cpp/rtps/writer/RTPSWriter.cpp` | 304 |
-| `RTPSWriter::calculateMaxDataSize()` | `src/cpp/rtps/writer/RTPSWriter.cpp` | 314 |
-| `RTPSParticipantImpl::calculateMaxDataSize()` | `src/cpp/rtps/participant/RTPSParticipantImpl.cpp` | 2121 |
-| `RTPSParticipantImpl::getMaxMessageSize()` | `src/cpp/rtps/participant/RTPSParticipantImpl.cpp` | 2099 |
-
-#### 2. RTPS 分片和 IP 分片是什么关系
-
-这是两个完全不同层次的分片机制，互相独立但叠加作用：
-
-```
-┌─────────────────────────────────────────────────────┐
-│  应用层：一帧雷达点云 0.5MB                           │
-└──────────────────────┬──────────────────────────────┘
-                       │ RTPS 分片（Fast-DDS 做的）
-                       ▼
-┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ... ┌──────┐
-│ frag1│ │ frag2│ │ frag3│ │ frag4│     │ frag8│  ← 8 个 RTPS fragment
-│ 65KB │ │ 65KB │ │ 65KB │ │ 65KB │     │ 残余 │     每个是一个独立 UDP 包
-└──┬───┘ └──┬───┘ └──────┘ └──────┘     └──────┘
-   │        │
-   │        │ IP 分片（Linux 内核做的）
-   ▼        ▼
-┌────┐┌────┐...┌────┐  ┌────┐┌────┐...┌────┐
-│1500││1500│   │1500│  │1500││1500│   │1500│  ← 每个 RTPS fragment
-│    ││    │   │    │  │    ││    │   │    │     被切成 ~45 个 IP fragment
-└────┘└────┘   └────┘  └────┘└────┘   └────┘
-```
-
-**RTPS 分片（应用层）**
-- 谁做的：Fast-DDS 库（用户态）
-- 为什么：一帧数据 0.5MB，超过 UDP 传输的最大消息大小（65500字节）
-- 分片大小：约 65KB（由 `s_maximumMessageSize` 减去各种协议头决定）
-- 重组：由接收端的 Fast-DDS `StatelessReader` 负责，收齐所有 fragment 后拼成完整消息
-- 特点：有序列号，接收端知道一帧有多少个 fragment
-
-**IP 分片（内核层）**
-- 谁做的：Linux 内核网络协议栈（内核态）
-- 为什么：每个 65KB 的 UDP 包超过以太网 MTU（1500字节）
-- 分片大小：1480 字节有效载荷（MTU 1500 - IP头 20）
-- 重组：由接收端的 Linux 内核负责，收齐所有 IP fragment 后拼成完整 UDP 包
-- 特点：对应用层完全透明，应用程序不知道 IP 分片的存在
-
-**关键区别**
-
-| 特性 | RTPS 分片 | IP 分片 |
-|------|----------|---------|
-| 层次 | 应用层（用户态） | 网络层（内核态） |
-| 执行者 | Fast-DDS 库 | Linux 内核 |
-| 触发条件 | 数据 > ~65KB | UDP包 > MTU(1500) |
-| 分片大小 | ~65KB | ~1480 字节 |
-| 重组位置 | 接收端 Fast-DDS | 接收端内核 |
-| 丢一个的后果 | 丢一个 RTPS fragment | 丢整个 UDP 包（65KB） |
-| 应用可见性 | 可见（有 API） | 不可见（透明） |
-
-**为什么 IP 分片丢包影响巨大**
-
-IP 分片有一个致命特点：45 个 IP fragment 中只要丢 1 个，整个 65KB 的 UDP 包就无法重组，全部作废。这就是为什么 IP fragment 重组失败会导致雪崩——不是丢了 1/45 的数据，而是丢了 45/45。
-
-#### 3. 为什么网络传输量是 10Hz × 8 × 45
-
-这个计算是逐层展开的：
-
-```
-第1层：雷达发送频率
-  10Hz = 每秒 10 帧
-
-第2层：RTPS 分片
-  每帧 0.5MB ÷ 65KB/fragment ≈ 8 个 RTPS fragment
-  每秒 RTPS fragment 数 = 10 × 8 = 80 个/秒
-  （也就是 80 个 UDP 包/秒）
-
-第3层：IP 分片
-  每个 UDP 包 65KB ÷ 1480 字节/fragment ≈ 45 个 IP fragment
-  每秒 IP fragment 数 = 80 × 45 = 3600 个/秒
-
-总流量：
-  3600 × 1500 字节 ≈ 5.4MB/s（线路上的实际流量）
-```
-
-用一张表来看：
-
-| 层次 | 单位 | 每秒数量 | 单个大小 | 每秒总量 |
-|------|------|---------|---------|---------|
-| 应用层（帧） | 雷达帧 | 10 | 0.5MB | 5MB/s |
-| RTPS 层 | DATA_FRAG | 80 | ~65KB | 5MB/s |
-| IP 层 | IP fragment | 3600 | ~1500B | 5.4MB/s |
-| 以太网层 | 以太网帧 | 3600 | ~1514B | 5.4MB/s |
-
-> 注意：从应用层到以太网层，有效数据量不变（5MB/s），但因为每层都加了协议头，线路上的实际流量略大于 5MB/s。
-
-#### 4. Linux 内核 IP fragment 重组机制
-
-##### 什么是 IP 分片（Fragmentation）
-
-当一个 IP 包的大小超过链路的 MTU（Maximum Transmission Unit，以太网默认 1500 字节）时，发送端的内核会把它切成多个小片（fragment），每片都能独立在网络上传输。
-
-每个 IP fragment 都带有：
-- **Identification（标识）**：同一个原始包的所有 fragment 共享同一个 ID
-- **Fragment Offset（偏移量）**：这个 fragment 在原始包中的位置
-- **More Fragments（MF 标志）**：是否还有后续 fragment（最后一片 MF=0）
-
-```
-原始 IP 包（65528 字节）：
-┌──────────────────────────────────────────────────┐
-│ IP头(20B) │            数据(65508B)               │
-└──────────────────────────────────────────────────┘
-                    ↓ IP 分片
-┌──────────────┐ ┌──────────────┐     ┌──────────────┐
-│IP头│数据(1480)│ │IP头│数据(1480)│ ... │IP头│数据(残余)│
-│MF=1,offset=0 │ │MF=1,offset=185│    │MF=0,offset=N │
-└──────────────┘ └──────────────┘     └──────────────┘
-     fragment 1       fragment 2           fragment 45
-```
-
-> Fragment Offset 的单位是 8 字节，所以 offset=185 表示偏移 185×8=1480 字节。
-
-##### 什么是 IP 重组（Reassembly）
-
-接收端的内核收到 IP fragment 后，需要把属于同一个原始包的所有 fragment 重新拼装成完整的 IP 包，然后交给上层（UDP）。这个过程叫重组（reassembly）。
-
-重组过程：
-1. 内核收到一个 IP fragment
-2. 根据 (源IP, 目的IP, 协议, Identification) 四元组找到对应的重组队列
-3. 如果是新包，创建一个新的重组队列，分配内存
-4. 把 fragment 按 offset 插入队列的正确位置
-5. 检查是否收齐了所有 fragment（从 offset=0 到 MF=0 的最后一片，中间无空洞）
-6. 如果收齐，拼装成完整 IP 包，交给 UDP 层
-7. 如果超时未收齐，丢弃整个队列
-
-##### 内核的三个关键参数
-
-```
-net.ipv4.ipfrag_high_thresh = 4194304   (4MB，默认值)
-net.ipv4.ipfrag_low_thresh  = 3145728   (3MB，默认值)
-net.ipv4.ipfrag_time        = 30        (30秒，默认值)
-```
-
-**ipfrag_high_thresh（高水位线）**
-
-所有正在重组的 IP fragment 占用的总内存上限。当总内存达到这个值时，内核会触发紧急清理——直接丢弃所有未完成的重组队列，直到内存降到 `ipfrag_low_thresh` 以下。
-
-这就是"雪崩"的根源：不是逐个清理，而是全部清理。
-
-**ipfrag_low_thresh（低水位线）**
-
-紧急清理的目标水位。清理会一直进行，直到内存降到这个值以下。
-
-**ipfrag_time（超时时间）**
-
-一个重组队列的最大等待时间。如果超过这个时间还没收齐所有 fragment，内核会丢弃整个队列。默认 30 秒太长了——一个正常的 UDP 包的所有 fragment 应该在毫秒级内全部到达，30 秒意味着大量"僵尸"队列占用内存。
-
-##### 为什么默认参数会出问题
-
-```
-每秒 IP fragment 流量：3600 个 × 1500 字节 ≈ 5MB/s
-ipfrag_high_thresh：4MB
-ipfrag_time：30 秒
-```
-
-正常情况下，fragment 到达后很快就能重组完成，不会长时间占用缓冲区。但如果有少量 fragment 丢失（网络抖动、CPU 繁忙等），对应的重组队列就会一直等待，直到 30 秒超时。
-
-随着时间推移，这些"僵尸"队列越积越多：
-- 第 1 秒：少量僵尸队列
-- 第 10 秒：僵尸队列占用 1MB
-- 第 20 秒：僵尸队列占用 3MB
-- 第 30 秒：僵尸队列 + 正常流量 > 4MB → 触发全量清理 → 雪崩
-
-##### 内核源码位置（Linux 6.8）
-
-IP fragment 重组的核心代码在：
-- `net/ipv4/ip_fragment.c`：IPv4 fragment 重组
-- `net/ipv4/inet_fragment.c`：通用 fragment 管理（内存管理、超时、清理）
-- `include/net/inet_frag.h`：数据结构定义
-
-关键函数：
-- `ip_defrag()`：重组入口
-- `ip_frag_queue()`：将 fragment 插入重组队列
-- `ip_frag_reasm()`：尝试重组
-- `inet_frag_destroy()`：销毁重组队列
-- `inet_frag_evictor()`：内存超限时的紧急清理（雪崩的触发点）
-
-##### 推荐书籍和资料
-
-**经典书籍**
-
-1. **《TCP/IP 详解 卷1：协议》**（W. Richard Stevens）
-   - 第 11 章"IP 分片"：详细讲解 IP 分片和重组的机制
-   - 第 23 章"TCP 的保活定时器"：理解超时机制
-   - 这是网络协议的"圣经"，强烈推荐
-
-2. **《Linux 内核源码剖析：TCP/IP 实现》**（樊东东、莫澜）
-   - 详细分析 Linux 内核网络协议栈的源码实现
-   - 包含 IP fragment 重组的内核实现细节
-
-3. **《深入理解 Linux 网络》**（张彦飞）
-   - 从内核源码角度讲解 Linux 网络栈
-   - 包含收包流程、软中断、socket 缓冲区等
-
-4. **《Understanding Linux Network Internals》**（Christian Benvenuti, O'Reilly）
-   - 第 22-23 章专门讲 IP fragmentation/defragmentation
-   - 深入到内核数据结构和函数级别
-
-**在线资料**
-
-- RFC 791（IP 协议规范）：IP 分片和重组的官方定义
-- `man 7 ip`：Linux IP 协议手册页，包含 ipfrag 参数说明
-- 内核文档 `Documentation/networking/ip-sysctl.rst`：所有 IP 相关 sysctl 参数
-
-#### 5. ReasmOK 和 ReasmFail 是什么
-
-这两个是 Linux 内核维护的 SNMP 统计计数器，记录在 `/proc/net/snmp` 文件中。
-
-```bash
-$ cat /proc/net/snmp | grep -A1 "^Ip:"
-Ip: Forwarding DefaultTTL InReceives ... ReasmReqds ReasmOKs ReasmFails ...
-Ip: 1          64         123456    ... 84000      84       0          ...
-```
-
-**三个关键计数器**
-
-| 计数器 | 含义 | 单位 |
-|--------|------|------|
-| ReasmReqds | 收到的需要重组的 IP fragment 总数 | 个 |
-| ReasmOKs | 成功重组的 IP 包数（不是 fragment 数） | 个 |
-| ReasmFails | 重组失败的次数（超时、内存不足等） | 次 |
-
-**正常时的数值**
-
-```
-每秒收到 3600 个 IP fragment（ReasmReqds 增长 3600/s）
-每 45 个 fragment 重组成 1 个 UDP 包
-成功重组 3600 ÷ 45 = 80 个/秒（ReasmOKs 增长 80/s）
-ReasmFails 增长 ≈ 0/s
-```
-
-**雪崩时的数值**
-
-```
-ReasmOKs = 0/s     ← 没有一个包能成功重组
-ReasmFails = 3500/s ← 所有重组队列都被清理掉了
-```
-
-ReasmFails = 3500/s 意味着每秒有 3500 个重组队列被丢弃。每个队列对应一个原始 UDP 包（65KB），所以每秒丢弃了 3500 × 65KB ≈ 220MB 的数据。实际上这些队列大部分是不完整的（因为新到的 fragment 也被立即清理），但数字反映了问题的严重程度。
-
-**如何监控**
-
-```bash
-# 实时查看每秒变化（取两次差值）
-watch -n 1 'cat /proc/net/snmp | grep -A1 "^Ip:"'
-
-# 或者用我们的监控脚本，它会自动计算每秒增量：
-# ReasmReq 列 = ReasmReqds 的每秒增量
-# ReasmOK 列 = ReasmOKs 的每秒增量
-# ReasmFail 列 = ReasmFails 的每秒增量
-```
-
-**判断标准**
-
-| 状态 | ReasmOK/s | ReasmFail/s | 说明 |
-|------|-----------|-------------|------|
-| 正常 | 60-84 | 0-5 | 偶尔丢几个 fragment 是正常的 |
-| 轻微丢包 | 50-70 | 10-50 | 有少量重组失败，可能影响接收率 |
-| 雪崩 | 0 | >1000 | 缓冲区溢出，完全无法重组 |
+> 关于 RTPS 分片、IP 分片、内核重组机制等网络知识的详细解释，参见**问题2：节点订阅数据的完整链路**。
 
 ---
 
-## 问题9：什么是单播，什么时候会走单播
+## 问题8：什么是单播，什么时候会走单播
 
 ### 问题背景
 
@@ -5395,3 +3566,174 @@ daemon 通过进程间通讯转发给订阅者（13665）
 | 数据传输 | 单播 → 192.168.0.100 | 13661 | ~65468 字节 |
 
 应用层丢包的核心链路：**Orin → daemon(13661) → 订阅者(13665)**，中间经过 daemon 转发，这个转发环节可能是丢包的根本原因。
+
+### 补充：为什么有些机器不用调 sysctl 就能正常接收？
+
+#### 现象
+
+同样的系统、同样的默认 sysctl 参数（`ipfrag_high_thresh=4MB`, `ipfrag_time=30s`），有些用户电脑不用任何调参就能稳定接收 10Hz 雷达数据，而某些电脑必须调大 `ipfrag_high_thresh` 才行。CPU 和内存都不是瓶颈。
+
+#### 原因：网卡硬件和驱动差异
+
+核心逻辑：**如果网卡层 fragment 丢失率极低，不完整的重组条目就不会在内核缓冲区堆积，默认 4MB 的 `ipfrag_high_thresh` 就够用。**
+
+关键差异在于网卡的中断处理能力和驱动质量，而不是 Ring Buffer 大小本身。
+
+#### 实际对比
+
+| 项目 | 正常机器（不用调参） | 问题机器（必须调参） |
+|------|---------------------|---------------------|
+| 网卡 | Intel I219（`enp0s31f6`） | Realtek RTL8125（`enp4s0`） |
+| 驱动 | `e1000e`（Intel 官方） | `r8169`（内核通用驱动） |
+| RX Ring Buffer 最大值 | 4096 | 256 |
+| RX Ring Buffer 当前值 | 256 | 256（已是上限） |
+| 中断处理 | NAPI 机制成熟，DMA 效率高 | r8169 通用驱动对 RTL8125 优化不足 |
+| 突发 fragment 处理 | 即使 RX=256 也能高效处理 | 突发流量下容易来不及收包 |
+
+#### 为什么 Intel 网卡 RX=256 也不丢包
+
+- Intel `e1000e` 驱动的 NAPI 中断合并机制成熟，DMA 调度高效
+- 即使 Ring Buffer 只有 256，也能在突发 fragment 到达时及时处理
+- fragment 在网卡层几乎不丢 → 内核重组缓冲区不堆积 → 默认 4MB 够用
+
+#### 为什么 Realtek RTL8125 + r8169 会丢包
+
+- `r8169` 是内核通用驱动，对 RTL8125 的中断处理和 DMA 调度不够优化
+- Ring Buffer 上限只有 256，且无法调大
+- 突发 fragment 到达时来不及处理 → 网卡层丢 fragment → 不完整重组条目堆积 → 撑爆 4MB → 雪崩
+
+#### 查看方法
+
+```bash
+# 查看网卡型号
+lspci | grep -i ethernet
+
+# 查看驱动
+ethtool -i enp4s0
+
+# 查看 Ring Buffer（需要 ethtool）
+ethtool -g enp4s0
+
+# 无 ethtool 时查看网卡芯片 vendor/device ID
+cat /sys/class/net/enp4s0/device/vendor /sys/class/net/enp4s0/device/device
+# 0x10ec + 0x8125 = Realtek RTL8125
+# 0x8086 + 0x15bc = Intel I219
+```
+
+#### 解决方案
+
+1. **保持 sysctl 调参（推荐，最省事）**：已验证有效，持久化即可
+   ```bash
+   sudo tee /etc/sysctl.d/99-ipfrag.conf << 'EOF'
+   net.ipv4.ipfrag_high_thresh = 67108864
+   net.ipv4.ipfrag_low_thresh = 50331648
+   net.ipv4.ipfrag_time = 5
+   net.core.rmem_max = 67108864
+   EOF
+   ```
+
+2. **换用 Realtek 官方 r8125 驱动**：官方驱动对 RTL8125 优化更好，Ring Buffer 上限可能更大，中断处理也更高效
+
+3. **Intel 网卡可调大 Ring Buffer**：正常机器虽然不调也行，但可以进一步提升余量
+   ```bash
+   sudo ethtool -G enp0s31f6 rx 4096
+   ```
+---
+
+## 总结
+
+### 核心问题和解决方案
+
+**问题1：为什么用户电脑需要设置 buffer**
+- **原因**：系统默认缓冲区可能很小，Fast-DDS 自动调整只到 64KB
+- **解决**：配置 receiveBufferSize 触发 set_option()，或增加 net.core.rmem_max
+
+**问题2：节点订阅数据的完整链路**
+- **链路**：网卡 → 内核缓冲区 → 应用层缓冲区 → 分片重组 → 反序列化 → 用户回调
+- **关键**：内核缓冲区最关键，满了会导致内核级丢包
+
+**问题3：为什么用户电脑频率不稳定**
+- **原因**：多任务环境，CPU 负载高，缓冲区太小
+- **unset 后更稳定**：启用共享内存，减轻网络负担
+- **TCP 不适合**：延迟高，队头阻塞，违背实时性
+
+**问题4：FASTDDS_BUILTIN_TRANSPORTS 的工作原理**
+- **作用**：控制默认传输方式
+- **LARGE_DATA**：启用 TCP，适合大数据但不适合实时数据
+- **推荐**：雷达数据使用 DEFAULT 模式（UDP + SHM）
+
+### 最终推荐配置
+
+```bash
+# 1. 增加系统缓冲区（所有机器）
+sudo sysctl -w net.core.rmem_max=67108864   # 64MB
+sudo sysctl -w net.core.wmem_max=67108864   # 64MB
+sudo sysctl -w net.core.rmem_default=16777216  # 16MB
+
+# 永久设置
+echo "net.core.rmem_max=67108864" | sudo tee -a /etc/sysctl.conf
+echo "net.core.wmem_max=67108864" | sudo tee -a /etc/sysctl.conf
+echo "net.core.rmem_default=16777216" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 2. 使用默认配置（推荐）
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+export FASTDDS_BUILTIN_TRANSPORTS=DEFAULT
+
+# 3. 或者使用优化的 XML 配置
+export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/optimized_config.xml
+```
+
+**优化的 XML 配置**：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<dds>
+    <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+        <transport_descriptors>
+            <transport_descriptor>
+                <transport_id>UDPv4Transport</transport_id>
+                <type>UDPv4</type>
+                <interfaceWhiteList>
+                    <address>192.168.0.100</address>
+                </interfaceWhiteList>
+                <sendBufferSize>67108864</sendBufferSize>      <!-- 64MB -->
+                <receiveBufferSize>67108864</receiveBufferSize> <!-- 64MB -->
+            </transport_descriptor>
+            <transport_descriptor>
+                <transport_id>SHMTransport</transport_id>
+                <type>SHM</type>
+            </transport_descriptor>
+        </transport_descriptors>
+        <participant profile_name="default_participant" is_default_profile="true">
+            <rtps>
+                <userTransports>
+                    <transport_id>UDPv4Transport</transport_id>
+                    <transport_id>SHMTransport</transport_id>
+                </userTransports>
+                <useBuiltinTransports>false</useBuiltinTransports>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>
+```
+
+### 验证配置
+
+```bash
+# 1. 验证系统缓冲区
+sysctl net.core.rmem_max
+sysctl net.core.wmem_max
+
+# 2. 启动 ROS2 节点后，查看实际的 socket 缓冲区
+sudo ss -u -a -n -p -m | grep ros
+
+# 3. 监控接收频率
+ros2 topic hz /livox/lidar_front
+
+# 4. 监控丢包统计
+watch -n 1 'netstat -su | grep -i "receive buffer errors"'
+
+# 5. 监控 CPU 负载
+htop
+```
